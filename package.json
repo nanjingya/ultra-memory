@@ -1,0 +1,88 @@
+{
+  "name": "ultra-memory",
+  "version": "3.0.0",
+  "description": "超长会话记忆系统 — 5层记忆架构，零外部依赖，支持所有LLM平台（Claude/GPT/Gemini/Qwen等）",
+  "keywords": [
+    "ai",
+    "memory",
+    "long-context",
+    "claude",
+    "openclaw",
+    "mcp",
+    "llm",
+    "session-memory",
+    "semantic-search",
+    "ultra-memory",
+    "agent-memory",
+    "context-window",
+    "mem0-alternative",
+    "openai",
+    "gemini",
+    "qwen"
+  ],
+  "homepage": "https://github.com/nanjingya/ultra-memory",
+  "bugs": {
+    "url": "https://github.com/nanjingya/ultra-memory/issues"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "NanJingYa",
+    "url": "https://github.com/nanjingya"
+  },
+  "contributors": [
+    {
+      "name": "NanJingYa",
+      "url": "https://github.com/nanjingya"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nanjingya/ultra-memory.git"
+  },
+  "bin": {
+    "ultra-memory": "./scripts/mcp-server.js",
+    "ultra-memory-init": "./scripts/init.py",
+    "ultra-memory-log": "./scripts/log_op.py",
+    "ultra-memory-recall": "./scripts/recall.py",
+    "ultra-memory-summarize": "./scripts/summarize.py",
+    "ultra-memory-restore": "./scripts/restore.py"
+  },
+  "scripts": {
+    "test": "python3 test_e2e.py",
+    "start": "node scripts/mcp-server.js",
+    "server": "python3 platform/server.py"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "python": ">=3.8.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "files": [
+    "scripts/",
+    "platform/",
+    "SKILL.md",
+    "README.md",
+    "CLAWHUB.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "claudeskills": {
+    "format": "1.0",
+    "trigger": {
+      "zh": ["记住", "别忘了", "上次", "回忆", "记忆", "不要忘记", "记录", "跨会话", "继续昨天"],
+      "en": ["remember", "don't forget", "what did we", "recall", "memory", "log this", "context lost", "keep track"]
+    },
+    "layer": {
+      "1": "ops.jsonl — 操作日志层（append-only）",
+      "2": "summary.md — 会话摘要层（里程碑压缩）",
+      "3": "semantic/ — 跨会话语义层（知识库+实体索引）",
+      "4": "entities.jsonl — 结构化实体索引（7类实体）",
+      "5": "tfidf_cache.json — 向量语义层（TF-IDF/sentence-transformers）"
+    }
+  }
+}

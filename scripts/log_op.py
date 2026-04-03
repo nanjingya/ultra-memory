@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""
+ultra-memory: 操作日志写入脚本
+每次工具调用、文件变更、命令执行后调用，追加写入 ops.jsonl
+"""
+
+import os
+import sys
+import json
+import re
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+
+ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
+
+# 敏感词正则（防止记录密码/密钥）
+SENSITIVE_PATTERNS = [
+    r'(?i)(password|passwd|pwd)\s*[=:]\s*\S+',
+    r'(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[=:]\s*\S+',
+    r'(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*',
+    r'[A-Za-z0-9]{32,}',  # 长随机字符串（可能是 token）
+]
+
+OP_TYPES = [
+    "tool_call", "file_write", "file_read",
+    "bash_exec", "reasoning", "user_instruction",
+    "decision", "error", "milestone"
+]
+
+# 扩展标签体系：覆盖 setup/code/test/debug/refactor/deploy/config/data/api/ui 十大类
+AUTO_TAGS = {
+    # setup — 环境初始化、依赖安装
+    "pip install": ["setup", "dependency"],
+    "pip3 install": ["setup", "dependency"],
+    "npm install": ["setup", "dependency"],
+    "yarn add": ["setup", "dependency"],
+    "pnpm add": ["setup", "dependency"],
+    "conda install": ["setup", "dependency"],
+    "apt install": ["setup", "dependency"],
+    "brew install": ["setup", "dependency"],
+    "初始化": ["setup"],
+    "安装": ["setup", "dependency"],
+    # code — 代码编写
+    "def ": ["code"],
+    "class ": ["code"],
+    "function ": ["code"],
+    "import ": ["code"],
+    "async def": ["code"],
+    "const ": ["code"],
+    "let ": ["code"],
+    "写代码": ["code"],
+    "实现": ["code"],
+    # test — 测试
+    "pytest": ["test"],
+    "unittest": ["test"],
+    "jest ": ["test"],
+    "vitest": ["test"],
+    "测试": ["test"],
+    "test_": ["test"],
+    "assert": ["test"],
+    "expect(": ["test"],
+    # debug — 调试
+    "debug": ["debug"],
+    "breakpoint": ["debug"],
+    "traceback": ["debug"],
+    "调试": ["debug"],
+    "排查": ["debug"],
+    "修复": ["debug"],
+    "fix": ["debug"],
+    # refactor — 重构
+    "refactor": ["refactor"],
+    "重构": ["refactor"],
+    "rename": ["refactor"],
+    "extract": ["refactor"],
+    "移动": ["refactor"],
+    # deploy — 部署
+    "docker": ["deploy"],
+    "kubectl": ["deploy"],
+    "helm ": ["deploy"],
+    "deploy": ["deploy"],
+    "部署": ["deploy"],
+    "发布": ["deploy"],
+    "release": ["deploy"],
+    "nginx": ["deploy"],
+    # config — 配置
+    ".env": ["config"],
+    "config": ["config"],
+    "配置": ["config"],
+    "settings": ["config"],
+    "yaml": ["config"],
+    "toml": ["config"],
+    # data — 数据处理
+    "dataframe": ["data"],
+    "pandas": ["data"],
+    "数据": ["data"],
+    "clean_": ["data"],
+    "preprocess": ["data"],
+    "csv": ["data"],
+    "json": ["data"],
+    "database": ["data"],
+    "sql": ["data"],
+    # api — 接口调用
+    "requests.": ["api"],
+    "fetch(": ["api"],
+    "axios": ["api"],
+    "curl ": ["api"],
+    "http": ["api"],
+    "endpoint": ["api"],
+    "接口": ["api"],
+    # ui — 界面
+    "component": ["ui"],
+    "vue": ["ui"],
+    "react": ["ui"],
+    "css": ["ui"],
+    "html": ["ui"],
+    "界面": ["ui"],
+    "页面": ["ui"],
+    # vcs — 版本控制
+    "git ": ["vcs"],
+    "commit": ["vcs"],
+    "branch": ["vcs"],
+    "merge": ["vcs"],
+    # error — 错误
+    "error": ["error"],
+    "exception": ["error"],
+    "traceback": ["error"],
+    "failed": ["error"],
+    "失败": ["error"],
+    "报错": ["error"],
+    # milestone — 里程碑
+    "✅": ["milestone"],
+    "完成": ["milestone"],
+    "done": ["milestone"],
+    "finished": ["milestone"],
+}
+
+# bash 命令意图识别：命令前缀 -> 标签
+BASH_INTENT_MAP = [
+    (r'^pip3?\s+install', ["setup", "dependency"]),
+    (r'^npm\s+(install|i\b)', ["setup", "dependency"]),
+    (r'^yarn\s+add', ["setup", "dependency"]),
+    (r'^pytest|^python\s+-m\s+pytest', ["test"]),
+    (r'^jest|^npx\s+jest', ["test"]),
+    (r'^git\s+commit', ["vcs"]),
+    (r'^git\s+push', ["vcs", "deploy"]),
+    (r'^git\s+', ["vcs"]),
+    (r'^docker\s+', ["deploy"]),
+    (r'^kubectl\s+', ["deploy"]),
+    (r'^curl\s+', ["api"]),
+    (r'^python3?\s+\S+\.py', ["code"]),
+    (r'^node\s+', ["code"]),
+    (r'^cat\s+|^head\s+|^tail\s+', ["file_read"]),
+    (r'^mkdir|^touch|^cp\s+|^mv\s+', ["setup"]),
+    (r'^rm\s+', ["error"]),  # 删除操作归为需要注意的操作
+]
+
+# 文件扩展名 -> 标签
+FILE_EXT_TAG_MAP = {
+    ".py": ["code"],
+    ".js": ["code"],
+    ".ts": ["code"],
+    ".jsx": ["code", "ui"],
+    ".tsx": ["code", "ui"],
+    ".vue": ["ui"],
+    ".html": ["ui"],
+    ".css": ["ui"],
+    ".scss": ["ui"],
+    ".less": ["ui"],
+    ".json": ["config"],
+    ".yaml": ["config"],
+    ".yml": ["config"],
+    ".toml": ["config"],
+    ".env": ["config"],
+    ".md": ["data"],
+    ".sql": ["data"],
+    ".csv": ["data"],
+    ".parquet": ["data"],
+    ".sh": ["deploy"],
+    ".dockerfile": ["deploy"],
+    ".tf": ["deploy"],
+    "dockerfile": ["deploy"],
+    ".test.py": ["test"],
+    ".spec.ts": ["test"],
+    ".spec.js": ["test"],
+    "_test.go": ["test"],
+}
+
+
+def sanitize(text: str) -> str:
+    """过滤敏感信息"""
+    if not text:
+        return text
+    for pattern in SENSITIVE_PATTERNS:
+        text = re.sub(pattern, "[REDACTED]", text)
+    return text
+
+
+def auto_tag(summary: str, detail: dict, op_type: str = "") -> list[str]:
+    """根据内容自动打标签（关键词 + bash命令意图 + 文件扩展名）"""
+    tags = set()
+    combined = summary.lower() + " " + json.dumps(detail, ensure_ascii=False).lower()
+
+    # 1. 关键词匹配（扩展标签体系）
+    for keyword, kw_tags in AUTO_TAGS.items():
+        if keyword.lower() in combined:
+            tags.update(kw_tags)
+
+    # 2. bash_exec 类型：解析命令意图
+    if op_type == "bash_exec":
+        cmd = detail.get("cmd", summary).strip()
+        for pattern, intent_tags in BASH_INTENT_MAP:
+            if re.match(pattern, cmd, re.IGNORECASE):
+                tags.update(intent_tags)
+                break
+
+    # 3. file_write 类型：根据文件扩展名自动分类
+    if op_type == "file_write":
+        file_path = detail.get("path", "")
+        if file_path:
+            lower_path = file_path.lower()
+            # 先检查特殊全名（如 Dockerfile）
+            base = lower_path.split("/")[-1].split("\\")[-1]
+            if base in FILE_EXT_TAG_MAP:
+                tags.update(FILE_EXT_TAG_MAP[base])
+            else:
+                # 检查复合扩展名（如 .test.py）
+                for ext, ext_tags in FILE_EXT_TAG_MAP.items():
+                    if lower_path.endswith(ext):
+                        tags.update(ext_tags)
+                        break
+
+    return list(tags)
+
+
+def log_op(
+    session_id: str,
+    op_type: str,
+    summary: str,
+    detail: dict = None,
+    tags: list = None,
+):
+    session_dir = ULTRA_MEMORY_HOME / "sessions" / session_id
+    if not session_dir.exists():
+        print(f"[ultra-memory] ⚠️  会话不存在: {session_id}，跳过记录")
+        return
+
+    ops_file = session_dir / "ops.jsonl"
+    meta_file = session_dir / "meta.json"
+
+    # 读取当前序号
+    seq = 0
+    if meta_file.exists():
+        with open(meta_file, encoding="utf-8") as f:
+            meta = json.load(f)
+        seq = meta.get("op_count", 0) + 1
+    else:
+        meta = {}
+
+    detail = detail or {}
+    summary = sanitize(summary)
+    detail = json.loads(sanitize(json.dumps(detail, ensure_ascii=False)))
+
+    auto_tags = auto_tag(summary, detail, op_type)
+    all_tags = list(set((tags or []) + auto_tags))
+
+    entry = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "seq": seq,
+        "type": op_type,
+        "summary": summary[:200],  # 摘要限长
+        "detail": detail,
+        "tags": all_tags,
+        "compressed": False,
+    }
+
+    # 追加写入（append-only，永不覆盖）
+    with open(ops_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    # 更新 meta
+    meta["op_count"] = seq
+    meta["last_op_at"] = entry["ts"]
+    if op_type == "milestone":
+        meta["last_milestone"] = summary
+    with open(meta_file, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+    # 自动提取结构化实体（写入 semantic/entities.jsonl）
+    try:
+        import sys as _sys
+        _scripts_dir = Path(__file__).parent
+        if str(_scripts_dir) not in _sys.path:
+            _sys.path.insert(0, str(_scripts_dir))
+        from extract_entities import extract_and_store
+        extract_and_store(session_id, dict(entry))
+    except Exception:
+        pass  # 实体提取失败不影响主流程
+
+    # 检查是否需要触发压缩
+    should_compress = False
+    if seq > 0 and seq % 50 == 0:
+        should_compress = True
+        print(f"[ultra-memory] ⚡ 操作日志已达 {seq} 条，建议触发摘要压缩")
+        print(f"[ultra-memory] 运行: python3 scripts/summarize.py --session {session_id}")
+
+    print(f"[ultra-memory] 📝 [{seq}] {op_type}: {summary[:60]}")
+    if should_compress:
+        print("[ultra-memory] COMPRESS_SUGGESTED")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="记录操作日志")
+    parser.add_argument("--session", required=True, help="会话 ID")
+    parser.add_argument("--type", required=True, choices=OP_TYPES, dest="op_type")
+    parser.add_argument("--summary", required=True, help="操作摘要（中英文均可）")
+    parser.add_argument("--detail", default="{}", help="详情 JSON 字符串")
+    parser.add_argument("--tags", default="", help="逗号分隔的标签")
+    args = parser.parse_args()
+
+    detail = json.loads(args.detail)
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+    log_op(args.session, args.op_type, args.summary, detail, tags)
