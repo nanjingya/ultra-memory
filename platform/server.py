@@ -58,6 +58,9 @@ ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ult
 
 VERSION = "3.0.0"
 
+# Bearer Token（可选）：由 --token 参数或 ULTRA_MEMORY_TOKEN 环境变量设置
+_BEARER_TOKEN: str = os.environ.get("ULTRA_MEMORY_TOKEN", "")
+
 logging.basicConfig(
     level=logging.INFO,
     format="[ultra-memory] %(asctime)s %(levelname)s %(message)s",
@@ -312,6 +315,16 @@ class MemoryHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.info(f"{self.address_string()} {fmt % args}")
 
+    def _check_auth(self) -> bool:
+        """如果配置了 Bearer Token，验证请求头；否则放行。"""
+        if not _BEARER_TOKEN:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and auth[7:] == _BEARER_TOKEN:
+            return True
+        self._send_json(401, {"error": "Unauthorized: 需要有效的 Bearer Token"})
+        return False
+
     def _send_json(self, status: int, data: dict):
         body = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
@@ -343,6 +356,8 @@ class MemoryHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self._check_auth():
+            return
         parsed = urlparse(self.path)
         path   = parsed.path.rstrip("/")
 
@@ -391,6 +406,8 @@ class MemoryHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"路径不存在: {path}"})
 
     def do_POST(self):
+        if not self._check_auth():
+            return
         parsed = urlparse(self.path)
         path   = parsed.path.rstrip("/")
 
@@ -436,17 +453,22 @@ def main():
                         help="监听端口（默认 3200）")
     parser.add_argument("--storage", default=None,
                         help="覆盖 ULTRA_MEMORY_HOME 路径")
+    parser.add_argument("--token", default=None,
+                        help="Bearer Token 认证密钥（不设则无需认证）")
     args = parser.parse_args()
 
-    global ULTRA_MEMORY_HOME
+    global ULTRA_MEMORY_HOME, _BEARER_TOKEN
     if args.storage:
         ULTRA_MEMORY_HOME = Path(args.storage)
         os.environ["ULTRA_MEMORY_HOME"] = str(ULTRA_MEMORY_HOME)
+    if args.token:
+        _BEARER_TOKEN = args.token
 
     server = HTTPServer((args.host, args.port), MemoryHandler)
 
     log.info(f"ultra-memory REST Server v{VERSION} 已启动")
     log.info(f"地址: http://{args.host}:{args.port}")
+    log.info(f"认证: {'已启用 Bearer Token' if _BEARER_TOKEN else '未启用（仅本机访问）'}")
     log.info(f"存储: {ULTRA_MEMORY_HOME}")
     log.info(f"脚本: {SCRIPTS_DIR}")
     log.info(f"工具: {list(TOOL_HANDLERS.keys())}")

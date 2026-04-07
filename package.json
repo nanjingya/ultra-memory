@@ -1,7 +1,7 @@
 {
   "name": "ultra-memory",
-  "version": "4.0.0",
-  "description": "超长会话记忆系统 — 5层记忆架构+自我进化引擎+时序矛盾检测，支持所有LLM平台",
+  "version": "4.1.0",
+  "description": "超长会话记忆系统 — RRF多路融合+本地Cross-Encoder精排+Weibull衰减+三层记忆分级，支持所有LLM平台",
   "keywords": [
     "ai",
     "memory",
@@ -18,7 +18,12 @@
     "mem0-alternative",
     "openai",
     "gemini",
-    "qwen"
+    "qwen",
+    "rrf",
+    "cross-encoder",
+    "weibull-decay",
+    "memory-tier",
+    "privacy-first"
   ],
   "homepage": "https://github.com/nanjingya/ultra-memory",
   "bugs": {
@@ -48,10 +53,11 @@
     "ultra-memory-restore": "scripts/restore.py",
     "ultra-memory-knowledge": "scripts/log_knowledge.py",
     "ultra-memory-extract-facts": "scripts/extract_facts.py",
-    "ultra-memory-evolve": "scripts/evolve_profile.py"
+    "ultra-memory-evolve": "scripts/evolve_profile.py",
+    "ultra-memory-manage": "scripts/manage.py"
   },
   "scripts": {
-    "test": "python3 test_e2e.py",
+    "test": "python3 -m unittest tests.test_core -v && python3 test_e2e.py",
     "start": "node scripts/mcp-server.js",
     "server": "python3 platform/server.py"
   },
@@ -62,7 +68,8 @@
   "optionalDependencies": {
     "pdfminer.six": "*",
     "pytesseract": "*",
-    "whisper": "*"
+    "whisper": "*",
+    "python-docx": "*"
   },
   "peerDependencies": {
     "langchain": ">=0.1.0"

@@ -19,6 +19,31 @@ if sys.stderr.encoding != "utf-8":
 
 ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
 
+# ── 三层记忆分级 ────────────────────────────────────────────────────────────
+# core:       核心记忆，长期保留，召回优先级最高（里程碑/决策/错误/用户指令）
+# working:    工作记忆，当前会话活跃，定期压缩后可降级为 peripheral
+# peripheral: 外围记忆，历史细节，已压缩，召回时权重最低
+
+TIER_CORE       = "core"
+TIER_WORKING    = "working"
+TIER_PERIPHERAL = "peripheral"
+
+CORE_OP_TYPES       = {"milestone", "decision", "error", "user_instruction"}
+PERIPHERAL_OP_TYPES = {"file_read", "tool_call"}
+
+
+def classify_tier(op: dict) -> str:
+    """根据操作类型和标签判断记忆层级"""
+    op_type = op.get("type", "")
+    tags    = set(op.get("tags", []))
+
+    if op_type in CORE_OP_TYPES:
+        return TIER_CORE
+    # file_read / tool_call 且不含里程碑标签 → 外围
+    if op_type in PERIPHERAL_OP_TYPES and "milestone" not in tags:
+        return TIER_PERIPHERAL
+    return TIER_WORKING
+
 
 def load_ops(session_dir: Path, only_uncompressed: bool = True) -> list[dict]:
     ops_file = session_dir / "ops.jsonl"
@@ -38,7 +63,7 @@ def load_ops(session_dir: Path, only_uncompressed: bool = True) -> list[dict]:
 
 
 def mark_compressed(session_dir: Path, up_to_seq: int):
-    """标记已压缩的操作（不删除，只打标记）"""
+    """标记已压缩的操作（不删除，打标记 + 写入 tier 分层）"""
     ops_file = session_dir / "ops.jsonl"
     tmp_file = session_dir / "ops.jsonl.tmp"
     with open(ops_file, encoding="utf-8") as fin, open(tmp_file, "w", encoding="utf-8") as fout:
@@ -49,6 +74,9 @@ def mark_compressed(session_dir: Path, up_to_seq: int):
             op = json.loads(line)
             if op["seq"] <= up_to_seq:
                 op["compressed"] = True
+                # 写入 tier（若尚未分级）
+                if "tier" not in op:
+                    op["tier"] = classify_tier(op)
             fout.write(json.dumps(op, ensure_ascii=False) + "\n")
     tmp_file.replace(ops_file)
 
@@ -206,6 +234,15 @@ def generate_summary_md(session_id: str, ops: list[dict], meta: dict) -> str:
         top_tags = [t for t, _ in tag_counts.most_common(5)]
         lines.append(f"- 主要领域: {', '.join(top_tags)}")
     lines.append("")
+
+    # 记忆分层统计
+    tier_counts: Counter = Counter(classify_tier(op) for op in ops)
+    if any(tier_counts.values()):
+        lines.append("## 🧠 记忆分层")
+        lines.append(f"- core（核心）: {tier_counts[TIER_CORE]} 条 — 长期保留，高召回优先级")
+        lines.append(f"- working（工作）: {tier_counts[TIER_WORKING]} 条 — 当前会话活跃")
+        lines.append(f"- peripheral（外围）: {tier_counts[TIER_PERIPHERAL]} 条 — 历史细节，低优先级")
+        lines.append("")
 
     # 操作日志范围（供下次恢复参考）
     lines.append("## 📋 操作日志范围")

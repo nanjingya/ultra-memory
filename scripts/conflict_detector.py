@@ -299,8 +299,9 @@ def mark_superseded(home: Path, jsonl_path: Path, seq_list: list[int]):
     tmp_file = jsonl_path.with_suffix(".tmp")
     written_seq = set()
 
-    with open(jsonl_path, encoding="utf-8") as f:
-        for i, line in enumerate(f):
+    with open(jsonl_path, encoding="utf-8") as f_in, \
+         open(tmp_file, "w", encoding="utf-8") as f_out:
+        for i, line in enumerate(f_in):
             if not line.strip():
                 continue
             try:
@@ -314,6 +315,6 @@ def mark_superseded(home: Path, jsonl_path: Path, seq_list: list[int]):
                 entry["superseded_at"] = _now_iso()
                 written_seq.add(line_num)
 
-            tmp_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            f_out.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     tmp_file.replace(jsonl_path)

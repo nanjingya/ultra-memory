@@ -8,9 +8,44 @@ import os
 import sys
 import json
 import re
+import time
+import logging
 import argparse
+import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.WARNING,
+    format="[ultra-memory] %(levelname)s %(message)s",
+)
+_log = logging.getLogger("ultra-memory.log_op")
+
+
+@contextlib.contextmanager
+def _advisory_lock(lock_path: Path, timeout: float = 5.0):
+    """跨平台建议性文件锁（.lock 哨兵文件）"""
+    deadline = time.monotonic() + timeout
+    acquired = False
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            acquired = True
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                _log.warning("文件锁等待超时 %s，直接继续写入", lock_path)
+                break
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        if acquired:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -18,6 +53,20 @@ if sys.stderr.encoding != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8")
 
 ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
+
+# 记忆注入标记（防止反馈环：AI 把自己的记忆输出又记录进去导致自引用积累）
+MEMORY_INJECTION_PATTERNS = [
+    r'\[ultra-memory\][^\n]*',           # 脚本自身的打印输出
+    r'MEMORY_READY[^\n]*',               # 初始化信号
+    r'COMPRESS_SUGGESTED[^\n]*',         # 压缩建议信号
+    r'SESSION_ID=sess_[A-Za-z0-9_]+',   # 会话 ID 注入
+    r'session_id:\s*sess_[A-Za-z0-9_]+',
+    r'\[RECALL\][^\n]*',                 # recall.py 的输出头
+    r'\[ops #\d+[^\]]*\][^\n]*',        # format_result 的 ops 格式
+    r'\[知识库[^\]]*\][^\n]*',           # format_result 的知识库格式
+    r'\[实体/[^\]]*\][^\n]*',           # format_result 的实体格式
+    r'\[摘要\][^\n]*',                   # format_result 的摘要格式
+]
 
 # 敏感词正则（防止记录密码/密钥）
 SENSITIVE_PATTERNS = [
@@ -192,10 +241,20 @@ FILE_EXT_TAG_MAP = {
 }
 
 
-def sanitize(text: str) -> str:
-    """过滤敏感信息"""
+def filter_memory_markers(text: str) -> str:
+    """过滤记忆注入标记，防止反馈环（AI 将自身记忆输出再次记录导致自引用噪音积累）"""
     if not text:
         return text
+    for pattern in MEMORY_INJECTION_PATTERNS:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def sanitize(text: str) -> str:
+    """过滤敏感信息 + 反馈环标记"""
+    if not text:
+        return text
+    text = filter_memory_markers(text)
     for pattern in SENSITIVE_PATTERNS:
         text = re.sub(pattern, "[REDACTED]", text)
     return text
@@ -284,18 +343,26 @@ def log_op(
     # 2A：画像冲突检测（user_instruction/decision + profile_update）
     if op_type in ("user_instruction", "decision") and detail.get("profile_update"):
         try:
+            import sys as _sys
+            _scripts_dir_cd = Path(__file__).parent
+            if str(_scripts_dir_cd) not in _sys.path:
+                _sys.path.insert(0, str(_scripts_dir_cd))
             from conflict_detector import detect_profile_conflict, mark_profile_superseded
             conflicts = detect_profile_conflict(detail["profile_update"], ULTRA_MEMORY_HOME)
             if conflicts:
                 entry["detail"]["profile_conflicts"] = conflicts
                 mark_profile_superseded(ULTRA_MEMORY_HOME, conflicts)
                 print(f"[ultra-memory] ⚡ 检测到 {len(conflicts)} 处画像矛盾，旧记录已标记失效")
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.debug("画像冲突检测失败（不影响主流程）: %s", _e)
 
     # 2B：知识库冲突检测（milestone/decision + knowledge_entry）
     if op_type in ("milestone", "decision") and detail.get("knowledge_entry"):
         try:
+            import sys as _sys
+            _scripts_dir_cd = Path(__file__).parent
+            if str(_scripts_dir_cd) not in _sys.path:
+                _sys.path.insert(0, str(_scripts_dir_cd))
             from conflict_detector import detect_knowledge_conflict, mark_superseded
             conflicts = detect_knowledge_conflict(detail["knowledge_entry"], ULTRA_MEMORY_HOME)
             if conflicts:
@@ -304,20 +371,24 @@ def log_op(
                 mark_superseded(ULTRA_MEMORY_HOME, kb_path, seq_list)
                 entry["detail"]["knowledge_conflicts"] = conflicts
                 print(f"[ultra-memory] ⚡ 检测到 {len(conflicts)} 条知识库矛盾，旧记录已标记失效")
-        except Exception:
-            pass
+        except Exception as _e:
+            _log.debug("知识库冲突检测失败（不影响主流程）: %s", _e)
 
-    # 追加写入（append-only，永不覆盖）
-    with open(ops_file, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    # 追加写入（append-only，永不覆盖）；文件锁保护并发写入
+    _lock_file = ops_file.with_suffix(".lock")
+    with _advisory_lock(_lock_file):
+        with open(ops_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    # 更新 meta
-    meta["op_count"] = seq
-    meta["last_op_at"] = entry["ts"]
-    if op_type == "milestone":
-        meta["last_milestone"] = summary
-    with open(meta_file, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+        # 更新 meta（在锁内，保证 op_count 单调递增）
+        meta["op_count"] = seq
+        meta["last_op_at"] = entry["ts"]
+        if op_type == "milestone":
+            meta["last_milestone"] = summary
+        _tmp_meta = meta_file.with_suffix(".tmp")
+        with open(_tmp_meta, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        _tmp_meta.replace(meta_file)
 
     # 自动提取结构化实体（写入 semantic/entities.jsonl）
     try:
@@ -327,8 +398,8 @@ def log_op(
             _sys.path.insert(0, str(_scripts_dir))
         from extract_entities import extract_and_store
         extract_and_store(session_id, dict(entry))
-    except Exception:
-        pass  # 实体提取失败不影响主流程
+    except Exception as _e:
+        _log.debug("实体提取失败（不影响主流程）: %s", _e)
 
     # 自动提取结构化事实（写入 evolution/facts.jsonl，异步不阻塞）
     try:
@@ -350,8 +421,9 @@ def log_op(
 
     # 多模态处理：检测媒体文件并后台提取
     try:
-        _media_exts = {".pdf": "extract_from_pdf.py", ".png": "extract_from_image.py",
-                        ".jpg": "extract_from_image.py", ".jpeg": "extract_from_image.py",
+        _media_exts = {".pdf": "extract_from_pdf.py", ".docx": "extract_from_docx.py",
+                        ".png": "extract_from_image.py", ".jpg": "extract_from_image.py",
+                        ".jpeg": "extract_from_image.py",
                         ".mp4": "transcribe_video.py", ".avi": "transcribe_video.py",
                         ".mov": "transcribe_video.py"}
         _file_path = detail.get("path", "")
