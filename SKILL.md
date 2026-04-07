@@ -269,6 +269,143 @@ python3 $SKILL_DIR/scripts/log_op.py \
 
 ---
 
+## 步骤七：元反思与进化
+
+记忆积累不等于进化。进化需要对记忆做二次加工：提炼模式、纠正偏差、淘汰噪音。
+
+### 7A：定期元反思
+
+**触发条件（满足任意一条）：**
+
+1. 当前会话里程碑累计达到 **5 个**（从 init.py 返回的 op_count 判断，每次 milestone 后检查）
+2. 用户说：回顾一下、总结经验、我们学到了什么、reflect、what have we learned、review progress
+3. 距上次元反思超过 **3 天**（从 user_profile.json 的 `last_reflection` 字段判断，不存在则视为从未反思过）
+
+**执行步骤（按顺序执行，不可跳过）：**
+
+**第一步：读取近期知识库**
+```bash
+# 读取最近 20 条知识库条目
+tail -20 $ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl
+```
+
+**第二步：读取近期会话摘要**
+```bash
+# 读取当前会话摘要
+cat $ULTRA_MEMORY_HOME/sessions/$SESSION_ID/summary.md 2>/dev/null || echo "暂无摘要"
+```
+
+**第三步：模型自主提炼（核心步骤）**
+
+基于读取到的内容，模型执行以下判断，每一项都必须完成：
+
+| 判断项 | 执行动作 |
+|-------|---------|
+| 发现两条或以上内容相似的知识条目 | 合并为一条更精炼的条目，写入 knowledge_base.jsonl，原条目加 `"merged": true` 标记 |
+| 发现某个知识点在多次操作中反复出现 | 将其标记为 `"importance": "high"`，写回该条目 |
+| 发现某条知识点超过 30 天未被检索且不是 high importance | 将其标记为 `"stale": true` |
+| 发现用户行为与 user_profile.json 记录不符 | 更新 user_profile.json 对应字段，加 `"corrected_at"` 时间戳 |
+| 总结出一个新的用户工作规律 | 追加到 user_profile.json 的 `observed_patterns` 数组 |
+
+**第四步：写入反思记录**
+```bash
+python3 $SKILL_DIR/scripts/log_op.py \
+  --session $SESSION_ID \
+  --type reasoning \
+  --summary "元反思完成：<一句话描述本次提炼了什么>" \
+  --tags "reflection,evolution"
+```
+
+**第五步：更新反思时间戳**
+
+将 `user_profile.json` 的 `last_reflection` 字段更新为当前 UTC 时间（ISO 格式）。
+
+**第六步：告知用户（简短）**
+
+用一句话告知用户反思结果。不需要展示完整报告，一句话即可，不打断主任务。
+
+---
+
+### 7B：错误修正
+
+**触发条件（满足任意一条）：**
+
+1. 用户说：不对、你记错了、不是这样的、纠正一下、wrong、that's not right、correct that
+2. 用户描述的信息与 user_profile.json 中的记录明显矛盾
+
+**执行步骤：**
+
+**第一步：定位错误记录**
+```bash
+cat $ULTRA_MEMORY_HOME/semantic/user_profile.json
+```
+
+**第二步：模型判断需要修正的字段**
+
+找到与用户当前描述矛盾的字段。
+
+**第三步：修正并记录**
+
+更新 user_profile.json 对应字段，同时在该字段旁追加：
+```json
+"_correction_note": "用户于 <日期> 纠正，原值为 <旧值>"
+```
+
+**第四步：记录修正操作**
+```bash
+python3 $SKILL_DIR/scripts/log_op.py \
+  --session $SESSION_ID \
+  --type decision \
+  --summary "用户画像修正：<字段名> 从 <旧值> 改为 <新值>" \
+  --tags "correction,profile"
+```
+
+**第五步：告知用户**
+
+"好的，我已经更新了记录，<字段名> 现在是 <新值>。"
+
+---
+
+### 7C：知识蒸馏（每月一次）
+
+**触发条件：**
+
+`user_profile.json` 的 `last_distillation` 字段距今超过 **30 天**，或该字段不存在。
+
+在步骤七 7A 执行完毕后，额外执行本步骤。
+
+**执行步骤：**
+
+**第一步：统计知识库规模**
+```bash
+wc -l $ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl
+```
+
+条目数少于 10 条时，跳过本步骤。
+
+**第二步：提取高价值条目**
+
+读取全部 knowledge_base.jsonl，筛选满足以下任意条件的条目：
+- `"importance": "high"`
+- `tags` 中包含 `"reusable"` 或 `"pattern"`
+- 同一 `title` 关键词出现超过 2 次
+
+**第三步：生成项目级知识摘要**
+
+基于筛选出的条目，生成一段 200 字以内的项目级知识摘要，格式：
+
+```json
+{"ts": "<当前UTC时间>", "type": "distillation", "period": "<YYYY-MM>", "project": "<项目名>", "summary": "<200字以内的知识摘要>", "source_count": <来源条目数>, "tags": ["distillation"]}
+```
+
+追加写入 `knowledge_base.jsonl`。
+
+**第四步：更新蒸馏时间戳**
+
+将 `user_profile.json` 的 `last_distillation` 更新为当前 UTC 时间。
+
+---
+
 ## 信号对照表
 
 | 脚本输出 | 立即执行 |
@@ -278,6 +415,8 @@ python3 $SKILL_DIR/scripts/log_op.py \
 | `COMPRESS_SUGGESTED` | 执行 summarize.py --session $SESSION_ID |
 | `SESSION_ID=sess_xxxxx` | 更新 SESSION_ID 为该值 |
 | 非零退出码 | 静默跳过，继续主任务 |
+| `op_count` 达到 5 的倍数且含 milestone | 触发步骤 7A |
+| user_profile.json `last_reflection` 距今 > 3 天 | 下次会话初始化后触发步骤 7A |
 
 ---
 
@@ -301,6 +440,8 @@ python3 $SKILL_DIR/scripts/log_op.py \
 | 任意脚本非零退出码 | **静默跳过**，不中断主任务 |
 | summarize.py 条数不足 | 加 --force 参数重新执行 |
 | 用户明确说"不用记录" | 立即停止记录，后续操作不再调用 log_op.py |
+| knowledge_base.jsonl 不存在 | 跳过 7A 的知识库读取，仅基于摘要执行反思 |
+| user_profile.json 解析失败 | 重新创建空文件，不中断进化流程 |
 
 **最重要原则：记忆功能失败不能影响主任务。静默处理，不打印错误。**
 
