@@ -279,6 +279,34 @@ def log_op(
         "compressed": False,
     }
 
+    # ── 矛盾检测（写入 ops.jsonl 之前）──────────────────────────────────────
+
+    # 2A：画像冲突检测（user_instruction/decision + profile_update）
+    if op_type in ("user_instruction", "decision") and detail.get("profile_update"):
+        try:
+            from conflict_detector import detect_profile_conflict, mark_profile_superseded
+            conflicts = detect_profile_conflict(detail["profile_update"], ULTRA_MEMORY_HOME)
+            if conflicts:
+                entry["detail"]["profile_conflicts"] = conflicts
+                mark_profile_superseded(ULTRA_MEMORY_HOME, conflicts)
+                print(f"[ultra-memory] ⚡ 检测到 {len(conflicts)} 处画像矛盾，旧记录已标记失效")
+        except Exception:
+            pass
+
+    # 2B：知识库冲突检测（milestone/decision + knowledge_entry）
+    if op_type in ("milestone", "decision") and detail.get("knowledge_entry"):
+        try:
+            from conflict_detector import detect_knowledge_conflict, mark_superseded
+            conflicts = detect_knowledge_conflict(detail["knowledge_entry"], ULTRA_MEMORY_HOME)
+            if conflicts:
+                kb_path = ULTRA_MEMORY_HOME / "semantic" / "knowledge_base.jsonl"
+                seq_list = [c["seq"] for c in conflicts]
+                mark_superseded(ULTRA_MEMORY_HOME, kb_path, seq_list)
+                entry["detail"]["knowledge_conflicts"] = conflicts
+                print(f"[ultra-memory] ⚡ 检测到 {len(conflicts)} 条知识库矛盾，旧记录已标记失效")
+        except Exception:
+            pass
+
     # 追加写入（append-only，永不覆盖）
     with open(ops_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")

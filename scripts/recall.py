@@ -289,6 +289,9 @@ def search_semantic(query_tokens: set, top_k: int) -> list[dict]:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                # 过滤已失效条目
+                if entry.get("superseded"):
+                    continue
                 text = entry.get("content", "") + " " + entry.get("title", "")
                 ts = entry.get("ts", "")
                 score = score_relevance(query_tokens, text, ts)
@@ -307,6 +310,36 @@ def search_semantic(query_tokens: set, top_k: int) -> list[dict]:
 
     results.sort(key=lambda x: -x["score"])
     return results[:top_k]
+
+
+def search_profile(query_tokens: set, home: Path) -> list[dict]:
+    """从 user_profile.json 检索相关字段，跳过 superseded 字段"""
+    profile_file = home / "semantic" / "user_profile.json"
+    if not profile_file.exists():
+        return []
+
+    try:
+        with open(profile_file, encoding="utf-8") as f:
+            profile = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+    results = []
+    for key, value in profile.items():
+        # 跳过 superseded 标记的字段
+        if key.endswith("_superseded"):
+            continue
+        text = f"{key} {value}"
+        score = score_relevance(query_tokens, str(text))
+        if score > 0.1:
+            results.append({
+                "score": score,
+                "source": "profile",
+                "data": {"field": key, "value": value},
+            })
+
+    results.sort(key=lambda x: -x["score"])
+    return results[:3]
 
 
 # ── TF-IDF 向量语义搜索层（第四层召回的增强）───────────────────────────
@@ -628,6 +661,10 @@ def format_result(result: dict, show_context: bool = True) -> str:
             for k, v in list(detail.items())[:2]:
                 lines.append(f"  [{k}] {str(v)[:60]}")
 
+    elif source == "profile":
+        d = result["data"]
+        lines.append(f"[用户画像] {d['field']}: {d['value']}")
+
     return "\n".join(lines) if lines else str(result)
 
 
@@ -649,6 +686,10 @@ def recall(session_id: str, query: str, top_k: int = 5):
     # Layer 3: 语义层（跨会话）
     semantic_results = search_semantic(query_tokens, top_k)
     found.extend(semantic_results)
+
+    # 画像检索（从 user_profile.json 搜索相关字段）
+    profile_results = search_profile(query_tokens, ULTRA_MEMORY_HOME)
+    found.extend(profile_results)
 
     # Layer 4: 实体索引（结构化精确检索）
     entity_results = search_entities(query_tokens, top_k)
