@@ -367,7 +367,7 @@ def test_http_server(session_id: str):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/tools", timeout=3) as resp:
                 body = json.loads(resp.read().decode())
             tools = body.get("tools", [])
-            check("GET /tools 返回 9 个工具", len(tools) == 9,
+            check("GET /tools 返回 10 个工具", len(tools) == 10,
                   f"实际: {len(tools)}")
         except Exception as e:
             check("GET /tools", False, str(e))
@@ -479,7 +479,7 @@ def test_platform_files():
     if openai_file.exists():
         with open(openai_file, encoding="utf-8") as f:
             tools = json.load(f)
-        check("tools_openai.json 包含 9 个工具", len(tools) == 9, f"实际: {len(tools)}")
+        check("tools_openai.json 包含 10 个工具", len(tools) == 10, f"实际: {len(tools)}")
         check("tools_openai.json 格式正确",
               all(t.get("type") == "function" and "function" in t for t in tools))
 
@@ -489,7 +489,7 @@ def test_platform_files():
         with open(gemini_file, encoding="utf-8") as f:
             gemini = json.load(f)
         decls = gemini.get("function_declarations", [])
-        check("tools_gemini.json 包含 9 个工具", len(decls) == 9, f"实际: {len(decls)}")
+        check("tools_gemini.json 包含 10 个工具", len(decls) == 10, f"实际: {len(decls)}")
 
 
 def test_mcp_tools():
@@ -518,8 +518,8 @@ def test_mcp_tools():
                 resp = _json.loads(line)
                 tools = resp.get("result", {}).get("tools", [])
                 tool_names = [t["name"] for t in tools]
-                check("MCP tools/list 返回 9 个工具",
-                      len(tools) == 9,
+                check("MCP tools/list 返回 10 个工具",
+                      len(tools) == 10,
                       f"实际: {len(tools)} 个 → {tool_names}")
                 check("包含 memory_init", "memory_init" in tool_names)
                 check("包含 memory_status", "memory_status" in tool_names)

@@ -164,6 +164,20 @@ const TOOLS = [
       },
       required: ["session_id"]
     }
+  },
+  {
+    name: "memory_knowledge_add",
+    description: "将重要信息追加到知识库（knowledge_base.jsonl），供未来相似任务检索。适用场景：解决了一个棘手的 bug、做出了重要技术选型决策、发现了工具使用技巧、完成了一个可复用的代码模式",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "知识标题（100字内）", maxLength: 100 },
+        content: { type: "string", description: "知识内容（200字内）", maxLength: 200 },
+        project: { type: "string", description: "关联项目名", default: "default" },
+        tags: { type: "array", items: { type: "string" }, description: "标签列表", default: [] }
+      },
+      required: ["title", "content"]
+    }
   }
 ];
 
@@ -290,6 +304,15 @@ function executeTool(name, input) {
     }
     case "memory_extract_entities": {
       return runScript("extract_entities.py", ["--session", input.session_id, "--all"]);
+    }
+    case "memory_knowledge_add": {
+      const args = [
+        "--title", input.title,
+        "--content", input.content,
+        "--project", input.project || "default",
+        "--tags", (input.tags || []).join(",")
+      ];
+      return runScript("log_knowledge.py", args);
     }
     default:
       return { success: false, output: `未知工具: ${name}` };

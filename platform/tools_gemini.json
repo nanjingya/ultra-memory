@@ -171,6 +171,33 @@
         },
         "required": ["session_id"]
       }
+    },
+    {
+      "name": "memory_knowledge_add",
+      "description": "Append important information to the knowledge base for future retrieval. Use when: solving a tricky bug, making a key tech decision, discovering a tool usage tip, or completing a reusable code pattern.",
+      "parameters": {
+        "type": "OBJECT",
+        "properties": {
+          "title": {
+            "type": "STRING",
+            "description": "Knowledge title (max 100 chars)"
+          },
+          "content": {
+            "type": "STRING",
+            "description": "Knowledge content (max 200 chars)"
+          },
+          "project": {
+            "type": "STRING",
+            "description": "Associated project name (default: 'default')"
+          },
+          "tags": {
+            "type": "ARRAY",
+            "items": { "type": "STRING" },
+            "description": "Tag list (optional)"
+          }
+        },
+        "required": ["title", "content"]
+      }
     }
   ]
 }

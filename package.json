@@ -1,6 +1,6 @@
 {
   "name": "ultra-memory",
-  "version": "3.0.0",
+  "version": "3.0.2",
   "description": "超长会话记忆系统 — 5层记忆架构，零外部依赖，支持所有LLM平台（Claude/GPT/Gemini/Qwen等）",
   "keywords": [
     "ai",
@@ -37,15 +37,16 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/nanjingya/ultra-memory.git"
+    "url": "git+https://github.com/nanjingya/ultra-memory.git"
   },
   "bin": {
-    "ultra-memory": "./scripts/mcp-server.js",
-    "ultra-memory-init": "./scripts/init.py",
-    "ultra-memory-log": "./scripts/log_op.py",
-    "ultra-memory-recall": "./scripts/recall.py",
-    "ultra-memory-summarize": "./scripts/summarize.py",
-    "ultra-memory-restore": "./scripts/restore.py"
+    "ultra-memory": "scripts/mcp-server.js",
+    "ultra-memory-init": "scripts/init.py",
+    "ultra-memory-log": "scripts/log_op.py",
+    "ultra-memory-recall": "scripts/recall.py",
+    "ultra-memory-summarize": "scripts/summarize.py",
+    "ultra-memory-restore": "scripts/restore.py",
+    "ultra-memory-knowledge": "scripts/log_knowledge.py"
   },
   "scripts": {
     "test": "python3 test_e2e.py",
@@ -74,8 +75,27 @@
   "claudeskills": {
     "format": "1.0",
     "trigger": {
-      "zh": ["记住", "别忘了", "上次", "回忆", "记忆", "不要忘记", "记录", "跨会话", "继续昨天"],
-      "en": ["remember", "don't forget", "what did we", "recall", "memory", "log this", "context lost", "keep track"]
+      "zh": [
+        "记住",
+        "别忘了",
+        "上次",
+        "回忆",
+        "记忆",
+        "不要忘记",
+        "记录",
+        "跨会话",
+        "继续昨天"
+      ],
+      "en": [
+        "remember",
+        "don't forget",
+        "what did we",
+        "recall",
+        "memory",
+        "log this",
+        "context lost",
+        "keep track"
+      ]
     },
     "layer": {
       "1": "ops.jsonl — 操作日志层（append-only）",

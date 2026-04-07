@@ -263,6 +263,19 @@ def tool_memory_extract_entities(body: dict) -> tuple[bool, str]:
     return _run_script("extract_entities.py", ["--session", session_id, "--all"])
 
 
+def tool_memory_knowledge_add(body: dict) -> tuple[bool, str]:
+    title = body.get("title", "")
+    content = body.get("content", "")
+    if not title or not content:
+        return False, "缺少 title 或 content 参数"
+    project = body.get("project", "default")
+    tags = body.get("tags", [])
+    args = ["--title", title, "--content", content, "--project", project]
+    if tags:
+        args.extend(["--tags", ",".join(tags)])
+    return _run_script("log_knowledge.py", args)
+
+
 # ── 工具注册表 ────────────────────────────────────────────────────────────
 
 TOOL_HANDLERS = {
@@ -275,6 +288,7 @@ TOOL_HANDLERS = {
     "memory_profile":          tool_memory_profile,
     "memory_entities":         tool_memory_entities,
     "memory_extract_entities": tool_memory_extract_entities,
+    "memory_knowledge_add":    tool_memory_knowledge_add,
 }
 
 TOOL_DESCRIPTIONS = {
@@ -287,6 +301,7 @@ TOOL_DESCRIPTIONS = {
     "memory_profile":          "读写用户画像（技术栈、偏好）",
     "memory_entities":         "查询结构化实体索引（函数/文件/依赖/决策/错误）",
     "memory_extract_entities": "对整个 ops.jsonl 全量重提取实体",
+    "memory_knowledge_add":    "追加知识库条目（bug解决方案、技术选型、工具技巧、可复用代码模式）",
 }
 
 

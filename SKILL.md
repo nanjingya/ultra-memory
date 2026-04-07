@@ -205,8 +205,14 @@ python3 <skill_dir>/scripts/mcp-server.js  # 通过 MCP 调用 memory_profile
 - 发现了某个工具/库的使用技巧
 - 完成了一个可复用的代码模式
 
-**执行方式：**
-追加写入 `~/.ultra-memory/semantic/knowledge_base.jsonl`，每行一条 JSON。
+**执行方式 — 方式 A（MCP 工具，推荐）：**
+```bash
+# 通过 memory_knowledge_add MCP 工具写入
+# 参数：title（必填，100字内）、content（必填，200字内）、project（可选）、tags（可选）
+```
+
+**执行方式 — 方式 B（直接追加）：**
+直接追加写入 `~/.ultra-memory/semantic/knowledge_base.jsonl`，每行一条 JSON。
 
 **knowledge_base.jsonl 格式：**
 ```json
