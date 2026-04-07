@@ -8,7 +8,7 @@ import os
 import sys
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from collections import Counter
 
@@ -130,7 +130,7 @@ def infer_next_step(ops: list[dict], in_progress: list[dict]) -> str:
 
 
 def generate_summary_md(session_id: str, ops: list[dict], meta: dict) -> str:
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     project = meta.get("project", "default")
     op_range = f"第 {ops[0]['seq']}-{ops[-1]['seq']} 条" if ops else "无"
 
@@ -230,7 +230,7 @@ def build_meta_summary_block(blocks: list[str]) -> str:
 
     meta_summary 结构比 summary 更紧凑，约 5 倍压缩比。
     """
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
     # 从各块提取关键行（以 - [ ] 、 ✅、🔑、⚠️、💡 开头的行）
     key_lines: list[str] = []
@@ -344,7 +344,7 @@ def summarize(session_id: str, force: bool = False):
     mark_compressed(session_dir, last_seq)
 
     # 更新 meta
-    meta["last_summary_at"] = datetime.utcnow().isoformat() + "Z"
+    meta["last_summary_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     meta["last_milestone"] = ops[-1]["summary"] if ops else meta.get("last_milestone")
     with open(meta_file, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)

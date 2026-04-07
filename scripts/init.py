@@ -9,7 +9,7 @@ import sys
 import json
 import hashlib
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Windows 兼容：强制 stdout/stderr 使用 UTF-8
@@ -23,7 +23,7 @@ ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ult
 
 
 def get_session_id(project: str = "default") -> str:
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     h = hashlib.md5(f"{project}{ts}".encode()).hexdigest()[:6]
     return f"sess_{ts}_{h}"
 
@@ -50,7 +50,7 @@ def init_session(project: str = "default", resume: bool = False) -> dict:
     meta = {
         "session_id": session_id,
         "project": project,
-        "started_at": datetime.utcnow().isoformat() + "Z",
+        "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "op_count": 0,
         "last_summary_at": None,
         "mode": detect_mode(),
@@ -221,7 +221,7 @@ def update_session_index(session_id: str, project: str, semantic_dir: Path):
     index["sessions"].append({
         "session_id": session_id,
         "project": project,
-        "started_at": datetime.utcnow().isoformat() + "Z",
+        "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "last_milestone": None,
     })
     # 只保留最近 100 个会话记录

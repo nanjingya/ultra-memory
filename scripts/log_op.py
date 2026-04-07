@@ -9,7 +9,7 @@ import sys
 import json
 import re
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 if sys.stdout.encoding != "utf-8":
@@ -270,7 +270,7 @@ def log_op(
     all_tags = list(set((tags or []) + auto_tags))
 
     entry = {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "seq": seq,
         "type": op_type,
         "summary": summary[:200],  # 摘要限长
