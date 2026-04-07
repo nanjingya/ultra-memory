@@ -11,6 +11,7 @@
 7. [n8n / LangGraph 集成](#7-n8n--langgraph-集成)
 8. [安全注意事项](#8-安全注意事项)
 9. [存储维护](#9-存储维护)
+10. [clawbot Auto-Hook 配置](#10-clawbot-auto-hook-配置)
 
 ---
 
@@ -305,3 +306,81 @@ python3 scripts/cleanup.py --older-than 30
 # 导出所有记忆（备份）
 python3 scripts/export.py --output ~/memory-backup.zip
 ```
+
+---
+
+## 10. clawbot Auto-Hook 配置
+
+ultra-memory 已提供 `clawbot_hook.py`，可在 clawbot 对话循环中自动触发记录，不依赖模型主动调用。
+
+### Python Hook（推荐）
+
+在 clawbot 的 skill_runner 或对话循环中导入：
+
+```python
+from ultra_memory.scripts.clawbot_hook import UltraMemoryHook
+
+hook = UltraMemoryHook()
+
+def run_conversation_turn(user_message, session_context):
+    response = call_model(user_message, session_context)
+
+    # 自动记录（加在这里）
+    hook.on_turn_end(
+        session_id=session_context.get("ultra_memory_session_id"),
+        model_name=session_context.get("model_name", "unknown"),
+        user_msg=user_message,
+        assistant_msg=response.text,
+        project=extract_project_name(user_message),
+    )
+
+    return response
+```
+
+### YAML Hook（clawbot 支持 hooks.yaml 时）
+
+```yaml
+hooks:
+  post_turn:
+    - name: ultra-memory-auto-log
+      enabled: true
+      condition: "session.ultra_memory_session_id != null"
+      command: python3
+      args:
+        - "${SKILL_DIR}/scripts/log_op.py"
+        - "--session"
+        - "${session.ultra_memory_session_id}"
+        - "--type"
+        - "tool_call"
+        - "--summary"
+        - "自动记录: ${user.message[:60]}"
+        - "--tags"
+        - "auto,model:${session.model_name}"
+      timeout: 5
+      on_failure: skip
+
+  post_tool_call:
+    - name: ultra-memory-tool-log
+      enabled: true
+      condition: "session.ultra_memory_session_id != null"
+      command: python3
+      args:
+        - "${SKILL_DIR}/scripts/log_op.py"
+        - "--session"
+        - "${session.ultra_memory_session_id}"
+        - "--type"
+        - "tool_call"
+        - "--summary"
+        - "工具调用: ${tool.name}"
+        - "--tags"
+        - "auto,tool:${tool.name}"
+      timeout: 5
+      on_failure: skip
+```
+
+### 设计原则
+
+1. **失败静默跳过**：所有 hook 加 try/except + timeout（5秒），失败不抛异常
+2. **超时要短**：log_op.py 是文件追加，100ms 内完成，5秒足够
+3. **不重复记录**：hook 记录加 `auto` tag，模型主动记录不加，后续可按 tag 过滤
+4. **session_id 为空时跳过**：`session_context.get("ultra_memory_session_id")` 为 None 时什么都不做
