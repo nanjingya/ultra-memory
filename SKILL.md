@@ -1,384 +1,278 @@
 ---
 name: ultra-memory
-description: 给 AI Agent 提供超长会话记忆能力，5层记忆架构（操作日志/摘要/语义/实体索引/向量语义），零外部依赖，支持 Claude Code、OpenClaw、GPT-4、Gemini、Qwen 等所有 LLM 平台。自动初始化记忆架构，管理全生命周期。适用于长编码任务、跨天继续工作、精确回忆操作细节等场景。
+description: >
+  ultra-memory 是 AI Agent 的超长会话记忆系统。
+  【必须触发-中文】用户说：记住、别忘了、记录一下、上次我们做了什么、帮我回忆、继续上次、从上次继续、不要忘记、上次、跨会话、继续昨天、还有印象吗、我们上次讨论过、之前那个是怎么写的、还记得吗、这次不要忘、帮我追踪、帮我记着
+  【必须触发-英文】用户说：remember this、don't forget、recall、what did we do、pick up where we left off、continue from last time、memory、keep track、log this、what was that、remind me、context lost、continue from yesterday、from last session
+  【隐式触发】用户描述了一个持续性任务（开发某项目、处理某数据集、持续性工作），即使未说"记住"也必须初始化记忆；对话操作数超过30条；用户说"继续昨天的任务"/"接着上次做"
+  【不触发】单次问答（"帮我写个正则"、"查一下天气"）；纯代码补全、文件格式转换等无状态操作；用户已在 context 中能找到所需信息；用户明确说"不用记录"/"just this once"
 ---
 
-# Ultra Memory — 超长会话记忆 Skill
+# Ultra Memory — 超长会话记忆
 
-## 触发词
+AI Agent 的操作记忆系统，每次操作后记录，跨会话持久化，可检索可进化。
 
-**必须触发：** 用户提到"记住"、"别忘了"、"上次我们做了什么"、"回忆"、"记忆"、"不要忘记"、"记录"、"跨会话"、"继续昨天"、"don't forget"、"remember this"、"what did we do"、"recall"、"context lost" 等。
+## 前置说明
 
-**隐式触发：** (1) 用户说"继续昨天的任务"/"接着上次做"；(2) 对话操作数超过30条；(3) 任务被描述为跨天/跨周期的长期工程；(4) 用户提到"我们上次讨论过"但 context 中找不到。
+所有脚本已存在于 `~/.ultra-memory/scripts/` 或技能目录下：
+- `init.py` — 初始化会话
+- `log_op.py` — 记录操作
+- `recall.py` — 检索记忆
+- `summarize.py` — 压缩摘要
+- `restore.py` — 恢复会话
+- `extract_entities.py` — 提取实体
 
-**不触发：** (1) 单次简短问答（"帮我写个正则"）；(2) 用户已在 context 内能找到信息；(3) 用户明确说"不用记录"；(4) 纯代码补全、文件格式转换等无状态任务。
-
-## 设计目标
-
-解决目前市面上记忆方案的核心缺陷：
-- **claude-mem**：只记录压缩摘要，丢失操作细节
-- **memory-lancedb-pro**：跨会话检索好，但会话内实时追踪弱
-- **全量上下文法**：精度高但延迟 10s+，token 爆炸
-- **本 Skill 的差异化**：三层架构 + 操作日志层，既记得住，又检索得快
-
----
-
-## 架构总览：三层记忆模型
-
-```
-┌─────────────────────────────────────────────────┐
-│  Layer 3: 跨会话语义层 (Semantic Store)           │
-│  向量检索 · 用户偏好 · 项目知识 · 持久化 KV       │
-├─────────────────────────────────────────────────┤
-│  Layer 2: 会话摘要层 (Session Summary)            │
-│  阶段性压缩 · 里程碑快照 · 决策记录               │
-├─────────────────────────────────────────────────┤
-│  Layer 1: 操作日志层 (Operation Log)  ← 核心差异化│
-│  每步工具调用 · 文件变更 · 命令执行 · 推理链       │
-└─────────────────────────────────────────────────┘
-```
-
-每层的文件存储位置：
-- Layer 1: `~/.ultra-memory/sessions/<session_id>/ops.jsonl`
-- Layer 2: `~/.ultra-memory/sessions/<session_id>/summary.md`
-- Layer 3: `~/.ultra-memory/semantic/` (KV + embeddings index)
+存储根目录：`~/.ultra-memory/`（可配置环境变量 `ULTRA_MEMORY_HOME`）
+不需要理解内部架构，只需按步骤调用脚本。
 
 ---
 
-## 初始化流程
+## 步骤一：会话初始化
 
-在会话开始或用户首次触发时，执行：
+### 触发时机
+
+首次与用户对话时，或用户提到记忆相关触发词时，立即执行。
+
+### 执行命令
 
 ```bash
-python3 ~/.openclaw/workspace/skills/ultra-memory/scripts/init.py
-# 或（Claude Code 环境）
-python3 <skill_dir>/scripts/init.py
+python3 <skill_dir>/scripts/init.py --project <项目名>
 ```
 
-这会：
-1. 创建本次会话的目录结构
-2. 生成唯一 `session_id`（时间戳 + hash）
-3. 从 Layer 3 加载相关历史上下文到当前 context
-4. 输出 `MEMORY_READY` 确认信号
+**参数说明：**
+- `--project`：项目名称，用于跨会话分组。不填默认为 `default`。
+
+### 期望输出
+
+输出包含 `MEMORY_READY` 字样，表示会话初始化成功。同时输出 `session_id:`，记录该会话 ID。
+
+### 告知用户
+
+初始化成功后，立即告知用户：
+> "记忆系统已就绪（session_id: xxx），开始记录本次操作。"
 
 ---
 
-## Layer 1：操作日志层（最重要）
+## 步骤二：操作记录
 
-### 记录时机
+**每次**以下任意事件发生时，立即调用 `log_op.py` 追加写入 ops.jsonl。
 
-**每次**以下操作发生后，立即追加写入 `ops.jsonl`：
+### 操作类型与命令对照表
 
-| 操作类型 | 触发场景 | 记录内容 |
-|---------|---------|---------|
-| `tool_call` | 调用任何 MCP 工具 | 工具名、入参、出参摘要、耗时 |
-| `file_write` | 创建/修改文件 | 文件路径、变更类型、内容摘要 |
-| `file_read` | 读取文件 | 文件路径、读取目的 |
-| `bash_exec` | 执行 shell 命令 | 命令内容、stdout 前200字符、exit code |
-| `reasoning` | 重要推理节点 | 推理摘要（50字内）、置信度、备选方案 |
-| `user_instruction` | 用户给出新指令 | 指令原文、解析意图 |
-| `decision` | 做出重要决策 | 决策内容、依据、放弃的方案 |
-| `error` | 发生错误或回退 | 错误信息、处理方式 |
+| 事件 | op_type | 命令示例 |
+|------|---------|---------|
+| 执行了 shell 命令 | `bash_exec` | `python3 log_op.py --session <id> --type bash_exec --summary "执行了..." --detail '{"cmd":"...","exit_code":0}'` |
+| 创建或修改了文件 | `file_write` | `python3 log_op.py --session <id> --type file_write --summary "创建了..." --detail '{"path":"..."}'` |
+| 读取了文件 | `file_read` | `python3 log_op.py --session <id> --type file_read --summary "读取了..." --detail '{"path":"..."}'` |
+| 进行了重要推理 | `reasoning` | `python3 log_op.py --session <id> --type reasoning --summary "决定用..." --detail '{"confidence":0.9}'` |
+| 做出了关键决策 | `decision` | `python3 log_op.py --session <id> --type decision --summary "选用X方案" --detail '{"rationale":"..."}'` |
+| 发生了错误或回退 | `error` | `python3 log_op.py --session <id> --type error --summary "报错..." --detail '{"traceback":"..."}'` |
+| 用户给了新指令 | `user_instruction` | `python3 log_op.py --session <id> --type user_instruction --summary "用户要求..."` |
+| 某个目标已完成 | `milestone` | `python3 log_op.py --session <id> --type milestone --summary "数据清洗模块完成"` |
 
-### 日志格式（ops.jsonl 每行一条）
+### 成功标志
 
-```json
-{
-  "ts": "2026-04-02T14:23:01Z",
-  "seq": 42,
-  "type": "tool_call",
-  "tool": "bash_tool",
-  "summary": "执行 pip install pandas，安装成功",
-  "detail": {
-    "cmd": "pip install pandas --break-system-packages",
-    "exit_code": 0,
-    "stdout_preview": "Successfully installed pandas-2.2.0"
-  },
-  "tags": ["setup", "python", "dependency"]
-}
-```
+命令返回 exit code 0 即为成功，输出形如：
+> `[ultra-memory] [1] bash_exec: 执行了 pip install pandas，安装成功`
 
-### 写入方式
+### 自动标签
 
-使用追加写入（append-only），永远不覆盖，保证操作历史完整性。
+`log_op.py` 会根据操作类型和内容自动追加标签（如 `setup`、`dependency`、`code`、`test` 等），无需手动指定 `--tags`。
+
+---
+
+## 步骤三：记忆检索
+
+### 触发时机
+
+用户问及"之前做了什么"、"上次那个函数在哪里"、"之前遇到过这个问题吗"等记忆相关问题时执行。
+
+### 执行命令
 
 ```bash
-# Claude 在每次操作后调用
-python3 ~/.openclaw/workspace/skills/ultra-memory/scripts/log_op.py \
-  --session <session_id> \
-  --type tool_call \
-  --summary "执行了bash命令" \
-  --detail '{"cmd": "...", "exit_code": 0}'
+python3 <skill_dir>/scripts/recall.py --session <session_id> --query "<用户问题的关键词>" --top-k 5
+```
+
+### 检索范围
+
+按以下优先级检索：
+1. 当前会话 `ops.jsonl`（精确匹配）
+2. 当前会话 `summary.md`（摘要快速定位）
+3. 跨会话 `knowledge_base.jsonl`（语义相似）
+4. 跨会话 `user_profile.json`（偏好匹配）
+
+### 结果展示
+
+将检索结果直接展示给用户，格式如下：
+```
+[RECALL] 找到 N 条相关记录：
+
+[ops #23 · 14:18] <操作摘要>
+[summary · 里程碑] <里程碑内容>
+[跨会话 · 日期 · 项目] <历史记录摘要>
 ```
 
 ---
 
-## Layer 2：会话摘要层
+## 步骤四：摘要压缩
 
-### 压缩时机
+### 触发时机
 
-满足以下**任一条件**时触发摘要压缩：
+满足以下**任一条件**时，立即执行压缩：
 
 1. 操作日志达到 **50 条**
 2. 距上次压缩超过 **30 分钟**
-3. 用户明确说"总结一下目前进展"
+3. 用户明确说"总结一下"
 4. 当前 context 占用超过 **60%**
 
-### 摘要内容结构（summary.md）
+### 执行命令
 
-```markdown
-# 会话摘要 — <session_id>
-更新时间: 2026-04-02 14:30
-
-## 目标
-用户希望完成: <当前任务总目标>
-
-## 已完成里程碑
-- [✅ 14:10] 初始化项目结构，创建了 src/ 和 tests/ 目录
-- [✅ 14:18] 安装依赖 pandas/numpy，配置 venv
-- [✅ 14:25] 实现数据清洗函数 clean_df()，通过单元测试
-
-## 当前进行中
-- [ ] 实现评分函数 score_quality()，已完成60%
-- [ ] 待处理: 边界情况处理（空值、超长文本）
-
-## 关键决策记录
-- 选用 LanceDB 而非 Chroma：原因是本地部署更稳定
-- 评分维度采用 ZL/GN 双维度：对齐用户现有工作流程
-
-## 用户偏好（本次会话观察到）
-- 倾向简洁代码，不喜欢过度注释
-- 喜欢在实现前先确认方案
-
-## 错误与回退
-- 14:22 bash 命令权限不足，已加 sudo 重试成功
-
-## 操作日志范围
-ops.jsonl 第 1-50 条（已压缩）
+```bash
+python3 <skill_dir>/scripts/summarize.py --session <session_id> --force
 ```
 
-### 压缩后处理
+### 期望输出
 
-压缩完成后：
-- 将 summary.md 最新版本置入 context 开头
-- 将 ops.jsonl 中已压缩的条目标记 `compressed: true`（不删除）
-- 向 Layer 3 异步写入本次会话新增的语义知识
+生成/更新 `~/.ultra-memory/sessions/<session_id>/summary.md`，输出包含：
+- 已完成里程碑（[✅] 标记）
+- 当前进行中（[ ] 标记）
+- 下一步建议（[💡] 标记）
+- 操作统计（[📊] 标记）
 
 ---
 
-## Layer 3：跨会话语义层
+## 步骤五：跨会话恢复
 
-### 存储内容
+### 触发时机
 
+用户说"继续上次"、"从上次继续"、"记得昨天那个项目吗"等时执行。也在新会话开始时（检测到 session_id 变化）自动执行。
+
+### 执行命令
+
+```bash
+python3 <skill_dir>/scripts/restore.py --project <项目名>
 ```
-~/.ultra-memory/semantic/
-├── user_profile.json        # 用户偏好、工作方式、常用技术栈
-├── project_registry.json    # 已知项目列表及核心信息
-├── knowledge_base.jsonl     # 语义知识条目（可向量化检索）
-└── session_index.json       # 历史会话索引，按主题分类
+
+### 告知用户
+
+恢复成功后，立即告知用户：
+> "我找到了上次会话的记录。上次我们做到了：[里程碑摘要]。当前状态：[进行中任务]。下一步建议：[具体建议]。"
+
+如果找到了用户画像，也在回复中体现用户偏好。
+
+---
+
+## 步骤六：记忆进化
+
+记忆进化在每次操作中持续进行，不打断主任务。
+
+### 6.1 用户画像更新
+
+**触发时机：**
+- 用户纠正了 AI 的代码风格或实现方式
+- 用户选择/拒绝了某个技术方案
+- 用户明确说出自己的技术栈或偏好
+- 用户表示某种工作流程更顺手
+
+**执行方式（二选一）：**
+
+方式 A — 使用 MCP 工具：
+```bash
+python3 <skill_dir>/scripts/mcp-server.js  # 通过 MCP 调用 memory_profile
 ```
 
-### user_profile.json 格式
+方式 B — 直接读写 JSON：
+```
+文件路径：~/.ultra-memory/semantic/user_profile.json
+```
 
+**user_profile.json 格式：**
 ```json
 {
-  "last_updated": "2026-04-02",
-  "tech_stack": ["Python", "Vue3", "TypeScript"],
-  "work_style": {
-    "prefers_concise_code": true,
-    "confirm_before_implement": true,
-    "scoring_framework": "ZL/GN"
-  },
-  "projects": ["ai-data-qa", "FusionUI", "ultra-memory"],
+  "tech_stack": ["Python", "Vue3"],
+  "work_style": {"prefers_concise_code": true},
+  "projects": ["ai-data-qa"],
   "language": "zh-CN",
-  "observed_patterns": [
-    "倾向在实现前讨论方案",
-    "喜欢类比解释复杂概念"
-  ]
+  "observed_patterns": ["倾向在实现前讨论方案"]
 }
 ```
 
-### 会话开始时的上下文注入
+### 6.2 知识库写入
 
-```markdown
-<!-- ULTRA-MEMORY CONTEXT INJECTION -->
-**已知背景（来自记忆层）：**
-- 用户技术栈: Python / Vue3 / TypeScript
-- 当前活跃项目: ai-data-qa, FusionUI
-- 上次会话(2026-04-01): 完成了数据清洗模块，遗留问题是边界值处理
-- 用户偏好: 简洁代码风格，倾向先确认方案再实现
-<!-- END INJECTION -->
+**触发时机：**
+- 解决了一个棘手的 bug（记录问题现象 + 解决方案）
+- 做出了重要的技术选型决策（记录选了什么、为什么、放弃了什么）
+- 发现了某个工具/库的使用技巧
+- 完成了一个可复用的代码模式
+
+**执行方式：**
+追加写入 `~/.ultra-memory/semantic/knowledge_base.jsonl`，每行一条 JSON。
+
+**knowledge_base.jsonl 格式：**
+```json
+{"ts": "2026-04-07T10:00:00Z", "project": "项目名", "title": "简短标题", "content": "内容（200字内）", "tags": ["bug-fix", "python"]}
 ```
+
+### 6.3 里程碑追踪
+
+**触发时机：**
+- 用户说"好了"、"完成了"、"搞定了"、"done"、"finished"
+- 某个功能/模块通过了测试
+- 阶段任务全部完成，用户准备切换下一个子任务
+
+**执行方式：**
+使用 `op_type=milestone` 调用 `log_op.py`（见步骤二表格）。
+
+**作用：** 里程碑记录在 `summary.md` 中，恢复会话时优先展示，让用户快速找回状态。
 
 ---
 
-## 检索接口
+## 环境变量表
 
-### 自然语言查询
-
-当用户问"之前我们做了什么""上次那个函数叫什么名字"时，按以下优先级检索：
-
-1. **当前会话 ops.jsonl**（精确匹配，最近50条）
-2. **当前会话 summary.md**（摘要快速定位）
-3. **Layer 3 semantic search**（跨会话模糊检索）
-
-```bash
-python3 ~/.openclaw/workspace/skills/ultra-memory/scripts/recall.py \
-  --query "数据清洗函数" \
-  --session <session_id> \
-  --top-k 5
-```
-
-### 检索结果格式
-
-```
-[RECALL] 找到 3 条相关记录：
-
-[ops #23 · 14:18] 创建了 clean_df() 函数，位于 src/cleaner.py，
-                  实现了空值填充和文本截断逻辑
-
-[summary · 里程碑] ✅ 数据清洗模块完成，通过 3 个单元测试
-
-[跨会话 · 2026-03-28] 上上次会话中也有类似函数 preprocess_text()，
-                       当时放在 utils/ 目录
-```
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `ULTRA_MEMORY_HOME` | `~/.ultra-memory/` | 存储根目录 |
+| `ULTRA_MEMORY_SESSION` | 自动生成 | 当前会话 session_id |
 
 ---
 
-## 防遗忘机制
+## 异常处理表
 
-### Context 压力检测
-
-每隔 10 次操作检查一次 context 使用率：
-
-```
-context 使用率 < 40%  → 无操作
-context 使用率 40-60% → 提示用户，询问是否压缩
-context 使用率 > 60%  → 自动触发 Layer 2 压缩
-context 使用率 > 80%  → 紧急压缩 + 警告，保留最近 20 条 ops
-```
-
-### 会话恢复
-
-当检测到用户重启会话（新 context）时，自动：
-
-1. 读取上次 `summary.md` + 最近 10 条 `ops.jsonl`
-2. 生成恢复提示注入 context 开头
-3. 告知用户："我记得上次我们在做 X，当时的状态是..."
-
-```bash
-python3 ~/.openclaw/workspace/skills/ultra-memory/scripts/restore.py \
-  --project <project_name>
-```
+| 异常情况 | 处理方式 |
+|---------|---------|
+| 脚本执行失败（exit code != 0） | 静默跳过，继续主任务。记忆功能失败**不阻塞**用户实际需求 |
+| 脚本超时（>15s） | 静默跳过，不重试 |
+| 存储目录无写入权限 | 静默跳过，尝试写入内存缓冲区，下次重试 |
+| 脚本文件不存在 | 静默跳过，退化为在当前 context 中手动维护摘要 |
+| 用户明确说"不用记录" | 立即停止记录，后续操作不再调用 log_op.py |
+| 文件被占用无法追加 | 自动重试 1 次，仍失败则静默跳过 |
 
 ---
 
-## 与现有方案的对比
-
-| 能力 | claude-mem | lancedb-pro | **ultra-memory** |
-|-----|-----------|-------------|-----------------|
-| 操作级日志 | ❌ | ❌ | ✅ 每步追踪 |
-| 摘要压缩 | ✅ | ⚠️ 基础 | ✅ 结构化 |
-| 跨会话持久化 | ⚠️ 依赖文件 | ✅ 向量DB | ✅ KV + 索引 |
-| 会话恢复 | ❌ | ⚠️ 手动 | ✅ 自动注入 |
-| 检索接口 | ❌ | ✅ 9个工具 | ✅ 统一recall |
-| Context 压力管理 | ❌ | ❌ | ✅ 自动压缩 |
-| 用户画像积累 | ❌ | ❌ | ✅ profile更新 |
-| 轻量部署（无向量DB）| ✅ | ❌ 需LanceDB | ✅ 可降级 |
-
----
-
-## 部署模式
-
-### 模式A：轻量模式（纯文件，无依赖）
-
-适合个人使用，零配置：
-- Layer 1: JSONL 文件
-- Layer 2: Markdown 文件
-- Layer 3: JSON 文件 + 简单关键词检索
-
-```bash
-# 安装（OpenClaw）
-cp -r ultra-memory ~/.openclaw/workspace/skills/
-```
-
-### 模式B：增强模式（LanceDB 向量检索）
-
-适合重度使用 / 商业场景：
-
-```bash
-pip install lancedb sentence-transformers --break-system-packages
-# 配置后 Layer 3 自动升级为向量检索
-python3 scripts/setup_vector.py
-```
-
-### 模式C：MCP 服务模式
-
-将 ultra-memory 封装为 MCP Server，供 Claude Code / OpenClaw 通过标准协议调用：
-
-```bash
-node scripts/mcp-server.js --port 3100
-```
-
-提供以下 MCP 工具：
-- `memory_log` — 记录操作
-- `memory_recall` — 检索记忆
-- `memory_summarize` — 触发压缩
-- `memory_restore` — 会话恢复
-- `memory_profile` — 读写用户画像
-
----
-
-## 使用示例
-
-### 场景1：长编码任务不丢失上下文
+## 完整执行流程
 
 ```
-用户: 帮我开发一个 Python 数据清洗工具
-Claude: [ultra-memory 初始化] 会话 sess_20260402_abc 已创建，开始记录...
-        我注意到你之前做过 ai-data-qa 项目，可以复用那里的评分逻辑...
-        [每次操作后自动写入 ops.jsonl]
-...（50条操作后）...
-Claude: [自动摘要] 已完成里程碑: 数据加载、清洗函数、单元测试。
-        当前进行中: 导出模块。context 已优化，继续...
-```
-
-### 场景2：跨天继续任务
-
-```
-用户（第二天）: 继续昨天的工作
-Claude: [自动恢复] 我记得昨天（2026-04-01）我们在开发数据清洗工具：
-        ✅ 已完成: 加载模块、clean_df()、基础测试
-        🔄 进行中: 导出模块，写到一半
-        下一步建议: 继续 export.py 的 to_csv() 方法
-        要从这里继续吗？
-```
-
-### 场景3：精确回忆操作细节
-
-```
-用户: 我们之前那个处理空值的逻辑是怎么写的？
-Claude: [检索 ops #23] 在 src/cleaner.py 的 clean_df() 中，
-        空值处理是：字符串列填充 ""，数值列填充 0，
-        代码在 line 45-52。要我展示吗？
+用户发起对话
+    │
+    ├─ 首次对话或听到记忆触发词？
+    │   └─ 是 → 步骤一：init.py → 告知用户"记忆就绪"
+    │
+    ├─ 用户说记忆相关问题？
+    │   └─ 是 → 步骤三：recall.py → 展示检索结果
+    │
+    └─ 每次用户与 AI 交互后：
+        │
+        ├─ 操作数 % 10 == 0 且 context > 60%？
+        │   └─ 是 → 步骤四：summarize.py
+        │
+        ├─ 发现用户偏好 / 解决重要问题 / 完成里程碑？
+        │   └─ 是 → 步骤六：进化（画像/知识库/里程碑）
+        │
+        └─ 步骤二：log_op.py（记录本次操作）
 ```
 
 ---
 
 ## 进阶配置
 
-详见 `references/advanced-config.md`（原 `advanced-config.md`），包含：
-- 自定义记录过滤规则（排除敏感内容）
-- 团队共享记忆配置（多人协作）
-- 记忆衰减策略（老旧记忆降权）
-- 与 n8n / LangGraph 集成方案
-- 商业部署安全注意事项
-
----
-
-## 注意事项
-
-1. **隐私**：ops.jsonl 可能包含代码和命令，注意不要记录密码/API Key。`log_op.py` 内置了敏感词过滤。
-2. **存储**：轻量模式下每个会话约 50-200KB，建议定期清理 30 天前的会话。
-3. **性能**：写入操作为异步追加，不阻塞主流程。
-4. **降级**：如果脚本不可用，Claude 应退化为在 CLAUDE.md 中手动维护摘要。
+详细配置项（过滤规则、LanceDB 向量检索升级、团队共享、安全注意事项等）见 `references/advanced-config.md`。
