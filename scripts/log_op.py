@@ -302,6 +302,48 @@ def log_op(
     except Exception:
         pass  # 实体提取失败不影响主流程
 
+    # 自动提取结构化事实（写入 evolution/facts.jsonl，异步不阻塞）
+    try:
+        import subprocess as _subprocess
+        _scripts_dir = Path(__file__).parent
+        _python = sys.executable
+        _startupinfo = _subprocess.STARTUPINFO()
+        _startupinfo.dwFlags |= _subprocess.STARTF_USESHOWWINDOW
+        _subprocess.Popen(
+            [_python, str(_scripts_dir / "extract_facts.py"),
+             "--session", session_id, "--op-seq", str(seq)],
+            stdout=_subprocess.DEVNULL,
+            stderr=_subprocess.DEVNULL,
+            start_new_session=True,
+            startupinfo=_startupinfo,
+        )
+    except Exception:
+        pass  # 事实提取失败静默跳过
+
+    # 多模态处理：检测媒体文件并后台提取
+    try:
+        _media_exts = {".pdf": "extract_from_pdf.py", ".png": "extract_from_image.py",
+                        ".jpg": "extract_from_image.py", ".jpeg": "extract_from_image.py",
+                        ".mp4": "transcribe_video.py", ".avi": "transcribe_video.py",
+                        ".mov": "transcribe_video.py"}
+        _file_path = detail.get("path", "")
+        if _file_path and op_type in ("file_read", "file_write"):
+            _ext = Path(_file_path).suffix.lower()
+            if _ext in _media_exts:
+                _script = _media_exts[_ext]
+                _multimodal_dir = Path(__file__).parent / "multimodal"
+                if (_multimodal_dir / _script).exists():
+                    _subprocess.Popen(
+                        [_python, str(_multimodal_dir / _script),
+                         "--session", session_id, "--path", _file_path],
+                        stdout=_subprocess.DEVNULL,
+                        stderr=_subprocess.DEVNULL,
+                        start_new_session=True,
+                        startupinfo=_startupinfo,
+                    )
+    except Exception:
+        pass  # 多模态提取失败静默跳过
+
     # 检查是否需要触发压缩
     should_compress = False
     if seq > 0 and seq % 50 == 0:

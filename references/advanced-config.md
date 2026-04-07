@@ -12,6 +12,7 @@
 8. [安全注意事项](#8-安全注意事项)
 9. [存储维护](#9-存储维护)
 10. [clawbot Auto-Hook 配置](#10-clawbot-auto-hook-配置)
+11. [自我进化引擎配置](#11-自我进化引擎配置)
 
 ---
 
@@ -384,3 +385,114 @@ hooks:
 2. **超时要短**：log_op.py 是文件追加，100ms 内完成，5秒足够
 3. **不重复记录**：hook 记录加 `auto` tag，模型主动记录不加，后续可按 tag 过滤
 4. **session_id 为空时跳过**：`session_context.get("ultra_memory_session_id")` 为 None 时什么都不做
+
+---
+
+## 11. 自我进化引擎配置
+
+v3.2.0 新增进化引擎，提供自动事实提取、矛盾检测、遗忘三大能力。
+
+### 存储结构
+
+```
+~/.ultra-memory/evolution/
+├── facts.jsonl           # 结构化事实（append-only）
+├── contradictions.jsonl  # 矛盾记录（append-only）
+├── fact_metadata.json    # 置信度/TTL/衰减状态（可变更）
+└── decay_log.jsonl      # 遗忘事件审计日志
+```
+
+### 配置项（config.json）
+
+```json
+{
+  "evolution": {
+    "enable_auto_extraction": true,
+    "auto_extraction_on_log": true,
+    "similarity_threshold": 0.72,
+    "forget_threshold": 0.05,
+    "half_life_days": 30,
+    "auto_negation_resolution": true
+  }
+}
+```
+
+| 配置项 | 默认值 | 说明 |
+|-------|--------|------|
+| `enable_auto_extraction` | `true` | 启用自动事实提取 |
+| `auto_extraction_on_log` | `true` | log_op 时自动触发提取 |
+| `similarity_threshold` | `0.72` | 矛盾检测相似度阈值 |
+| `forget_threshold` | `0.05` | 遗忘触发阈值（decay_score） |
+| `half_life_days` | `30` | 记忆半衰期 |
+| `auto_negation_resolution` | `true` | 自动消解低置信度矛盾 |
+
+### 脚本清单
+
+| 脚本 | 用途 | 调用方式 |
+|-----|------|---------|
+| `extract_facts.py` | 从 ops 提取事实三元组 | log_op.py 自动调用，或 `python3 scripts/extract_facts.py --session S --batch` |
+| `detect_contradictions.py` | 矛盾检测与消解 | extract_facts.py 触发，或 `python3 scripts/detect_contradictions.py --session S --batch` |
+| `auto_decay.py` | TTL 衰减与遗忘 | `python3 scripts/cleanup.py --run-decay` 或每日定时 |
+| `evolve_profile.py` | 画像贝叶斯更新 | `python3 scripts/evolve_profile.py --field X --value Y` |
+| `multimodal/extract_from_pdf.py` | PDF 文本提取 | 自动触发（依赖 pdfminer.six） |
+| `multimodal/extract_from_image.py` | 图片 OCR | 自动触发（依赖 pytesseract） |
+| `multimodal/transcribe_video.py` | 视频转录 | 自动触发（依赖 whisper） |
+
+### 多模态依赖安装
+
+```bash
+# PDF 文本提取
+pip install pdfminer.six
+
+# 图片 OCR（需安装 Tesseract 引擎）
+pip install pytesseract
+# Windows: https://github.com/UB-Mannheim/tesseract/wiki
+# macOS: brew install tesseract
+# Linux: sudo apt install tesseract-ocr
+
+# 视频转录（本地 Whisper，无需 API）
+pip install openai-whisper
+```
+
+### LangChain 集成
+
+```python
+from ultra_memory.integrations.langchain_memory import UltraMemoryMemory
+
+memory = UltraMemoryMemory(
+    session_id="sess_langchain_proj",
+    project="my-agent",
+    top_k=5
+)
+
+# LangChain agent 中使用
+agent = OpenAIAgent(..., memory=memory)
+```
+
+### LangGraph Checkpointer 集成
+
+```python
+from ultra_memory.integrations.langgraph_checkpointer import UltraMemoryCheckpointer
+
+checkpointer = UltraMemoryCheckpointer(session_id="sess_langgraph_proj")
+
+# 每个节点执行后自动保存状态
+def my_node(state):
+    checkpointer.save_checkpoint(state["step"], state)
+    return state
+
+graph = StateGraph(AgentState)
+graph.add_node("agent", my_node)
+compiled = graph.compile(checkpointer=checkpointer)
+```
+
+### n8n 集成
+
+在 n8n "Execute Command" 节点中：
+
+```
+命令: python3
+参数: /path/to/ultra-memory/integrations/n8n_nodes.py init --project=<项目名>
+```
+
+支持操作：`init`, `log`, `recall`, `profile`

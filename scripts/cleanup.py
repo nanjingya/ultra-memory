@@ -152,5 +152,26 @@ if __name__ == "__main__":
     parser.add_argument("--archive-only", action="store_true", help="只归档到 archive/ 目录，不删除")
     parser.add_argument("--dry-run", action="store_true", help="演习模式，只打印不执行")
     parser.add_argument("--project", default=None, help="只清理指定项目（默认所有项目）")
+    parser.add_argument(
+        "--run-decay", action="store_true",
+        help="执行事实衰减扫描（auto_decay.py），在清理前运行"
+    )
     args = parser.parse_args()
+
+    if args.run_decay:
+        import subprocess
+        scripts_dir = Path(__file__).parent
+        python = sys.executable
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        print("[ultra-memory] 运行事实衰减扫描...")
+        result = subprocess.run(
+            [python, str(scripts_dir / "auto_decay.py"), "--session", args.project or ""],
+            capture_output=True, text=True, startupinfo=startupinfo,
+        )
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+
     cleanup(args.days, args.archive_only, args.dry_run, args.project)

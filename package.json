@@ -1,7 +1,7 @@
 {
   "name": "ultra-memory",
-  "version": "3.1.0",
-  "description": "超长会话记忆系统 — 5层记忆架构，零外部依赖，支持所有LLM平台（Claude/GPT/Gemini/Qwen等）",
+  "version": "3.2.0",
+  "description": "超长会话记忆系统 — 5层记忆架构+自我进化引擎，支持所有LLM平台（Claude/GPT/Gemini/Qwen等）",
   "keywords": [
     "ai",
     "memory",
@@ -46,7 +46,9 @@
     "ultra-memory-recall": "scripts/recall.py",
     "ultra-memory-summarize": "scripts/summarize.py",
     "ultra-memory-restore": "scripts/restore.py",
-    "ultra-memory-knowledge": "scripts/log_knowledge.py"
+    "ultra-memory-knowledge": "scripts/log_knowledge.py",
+    "ultra-memory-extract-facts": "scripts/extract_facts.py",
+    "ultra-memory-evolve": "scripts/evolve_profile.py"
   },
   "scripts": {
     "test": "python3 test_e2e.py",
@@ -57,6 +59,14 @@
     "node": ">=18.0.0",
     "python": ">=3.8.0"
   },
+  "optionalDependencies": {
+    "pdfminer.six": "*",
+    "pytesseract": "*",
+    "whisper": "*"
+  },
+  "peerDependencies": {
+    "langchain": ">=0.1.0"
+  },
   "os": [
     "darwin",
     "linux",
@@ -64,7 +74,9 @@
   ],
   "files": [
     "scripts/",
+    "scripts/multimodal/",
     "platform/",
+    "integrations/",
     "SKILL.md",
     "README.md",
     "CLAWHUB.md"
@@ -102,7 +114,8 @@
       "2": "summary.md — 会话摘要层（里程碑压缩）",
       "3": "semantic/ — 跨会话语义层（知识库+实体索引）",
       "4": "entities.jsonl — 结构化实体索引（7类实体）",
-      "5": "tfidf_cache.json — 向量语义层（TF-IDF/sentence-transformers）"
+      "5": "tfidf_cache.json — 向量语义层（TF-IDF/sentence-transformers）",
+      "6": "evolution/ — 自我进化层（事实提取+矛盾检测+遗忘）"
     }
   }
 }
