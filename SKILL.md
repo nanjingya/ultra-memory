@@ -1,10 +1,7 @@
 ---
 name: ultra-memory
-version: 4.1.0
 description: >
-  ultra-memory 是多模型 AI 的超长会话记忆系统（v4.1）。
-  检索引擎：RRF 多路融合 + 本地 Cross-Encoder 精排 + Weibull 衰减 + Snippet 截取。
-  记忆分层：core / working / peripheral 三层自动分级，反馈环防护，跨会话零遗忘。
+  ultra-memory 给 AI Agent 提供跨会话记忆。每次操作后自动记录，会话结束后可恢复，支持按关键词检索历史操作。
   【必须触发-中文】用户说以下任意词：记住、别忘了、记录一下、不要忘记、上次我们做了什么、帮我回忆、继续上次的、从上次继续、记忆、帮我记、追踪进度
   【必须触发-英文】用户说以下任意词：remember、don't forget、recall、what did we do、pick up where we left off、continue from last time、memory、keep track、track progress、log this
   【隐式触发-A+B】同时满足以下两条时触发：(A)消息含持续性任务动词：开发、实现、处理、完成、构建、develop、implement、create、fix；(B)消息中包含项目名词（专有名词/文件名/系统名）
@@ -480,31 +477,28 @@ wc -l $ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl
 
 ---
 
-## 附录 A：v4.1 检索增强说明
+## 附录 A：检索行为说明
 
-以下优化已内置，无需配置，自动生效：
+`recall.py` 同时在五层记忆中搜索，结果按相关度和时间综合排序：
 
-| 优化项 | 说明 |
-|--------|------|
-| **RRF 多路融合** | BM25 + TF-IDF + 向量三通道结果用倒数排名融合，消除跨通道分数量纲不一致问题 |
-| **本地 Cross-Encoder 精排** | 安装 `sentence-transformers` 后自动启用 `cross-encoder/ms-marco-MiniLM-L-6-v2`，完全本地运行，零 API 调用，精排准确率提升约 5-8% |
-| **Weibull 衰减** | `exp(-(age/λ)^0.75)` 替代简单指数衰减；k<1 初期衰减更快（降低操作噪音），7 天后保留权重比简单指数高 2.7 倍（长期记忆保留更好） |
-| **Snippet 截取** | recall 输出从全量记录截取 150 字符相关片段，Token 消耗减少约 70% |
-| **反馈环防护** | 自动过滤 `[ultra-memory]`、`MEMORY_READY`、`[RECALL]`、`[ops #N]` 等记忆注入标记，防止 AI 把自身输出再次记录造成自引用噪音 |
+- 近期操作权重高于久远操作（时间衰减）
+- 关键词在多个层都命中时，该结果排名靠前
+- 安装 `sentence-transformers` 后，召回精度会进一步提升（可选，完全本地运行）
+- 输出为相关片段而非完整记录，节省上下文空间
 
 ---
 
-## 附录 B：记忆分层（三层模型）
+## 附录 B：记忆分层
 
-压缩后每条 op 自动写入 `tier` 字段：
+每条操作压缩后自动标记层级，影响 gc 清理策略：
 
-| 层级 | 类型 | 操作类型 | 召回策略 |
-|------|------|----------|---------|
-| **core** | 核心记忆 | milestone / decision / error / user_instruction | 长期保留，高优先级 |
-| **working** | 工作记忆 | reasoning / file_write / bash_exec | 当前会话活跃，定期压缩 |
-| **peripheral** | 外围记忆 | file_read / tool_call | 历史细节，低优先级，可 gc 回收 |
+| 层级 | 操作类型 | 说明 |
+|------|----------|------|
+| core | milestone / decision / error / user_instruction | 长期保留 |
+| working | reasoning / file_write / bash_exec | 当前会话活跃 |
+| peripheral | file_read / tool_call | 历史细节，可清理 |
 
-summary.md 每次压缩后自动输出分层统计。
+summary.md 压缩后会显示各层计数。
 
 ---
 
