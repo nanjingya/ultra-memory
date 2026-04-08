@@ -1,6 +1,6 @@
 {
   "name": "ultra-memory",
-  "version": "4.2.0",
+  "version": "4.2.1",
   "description": "超长会话记忆系统 — RRF多路融合+本地Cross-Encoder精排+Weibull衰减+三层记忆分级，支持所有LLM平台",
   "keywords": [
     "ai",
@@ -89,7 +89,7 @@
     "scripts/multimodal/",
     "platform/",
     "integrations/",
-    ".claude/",
+    ".claude/settings.json",
     "SKILL.md",
     "README.md",
     "CLAWHUB.md"
