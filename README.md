@@ -24,6 +24,7 @@
 | **访问频率感知** | 被频繁检索的记忆衰减更慢，长期保留用户真正关心的内容 |
 | **知识库去重** | 相似条目（相似度 >0.8）自动强化已有条目，避免重复噪音 |
 | **自动捕获钩子** | Claude Code PostToolUse 钩子自动记录工具调用，无需手动触发 |
+| **多用户/多 Agent 隔离** | `--scope user:alice / agent:bot1 / project:myapp`，不同 scope 完全独立存储 |
 | **可选语义增强** | 安装 sentence-transformers 后支持向量检索，完全本地运行 |
 | **零外部服务依赖** | 核心功能仅用 Python 标准库，无需数据库或云服务 |
 | **全平台支持** | MCP Server / REST API / Claude Code / OpenClaw |
@@ -63,6 +64,21 @@ export ULTRA_MEMORY_SESSION=sess_myproject   # 先 init.py 创建会话
 ```
 
 将 `.claude/settings.json` 复制到项目根目录的 `.claude/` 目录即可启用自动钩子。
+
+**多用户/多 Agent 隔离**：
+
+```bash
+# 用户 Alice 的独立记忆空间
+python3 scripts/init.py --scope user:alice --project myapp
+
+# 另一个 AI Agent 的独立记忆空间
+python3 scripts/init.py --scope agent:codebot --project myapp
+
+# 查看所有 scope
+python3 scripts/manage.py scopes
+```
+
+不同 scope 各有独立的 `sessions/` 和 `semantic/`，互不干扰。
 
 ### 任意 LLM 平台（REST API）
 

@@ -22,16 +22,47 @@ const os = require("os");
 const readline = require("readline");
 
 const SCRIPTS_DIR = path.join(__dirname);
-const ULTRA_MEMORY_HOME =
+const BASE_ULTRA_MEMORY_HOME =
   process.env.ULTRA_MEMORY_HOME || path.join(os.homedir(), ".ultra-memory");
 
-function runScript(script, args = []) {
+// scope → scoped home 路径映射（内存缓存，进程重启后由 memory_init 重建）
+const _scopedHomes = new Map();  // scope_string → absolute_path
+
+/** 将 scope 字符串转换为独立存储子目录路径（与 init.py._scope_to_home 逻辑一致）
+ *  "user:alice" → scopes/user__alice
+ *  "alice"      → scopes/user__alice  （自动补前缀）
+ */
+function scopeToHome(scope) {
+  if (!scope) return BASE_ULTRA_MEMORY_HOME;
+  if (!scope.includes(":")) scope = `user:${scope}`;
+  const safe = scope.replace(":", "__").replace(/[^\w\-]/g, "_");
+  return path.join(BASE_ULTRA_MEMORY_HOME, "scopes", safe);
+}
+
+/** 从 memory_init 输出中提取 SCOPED_HOME 路径 */
+function extractScopedHome(output) {
+  const m = output.match(/\[ultra-memory\]\s+SCOPED_HOME=(.+)/);
+  return m ? m[1].trim() : null;
+}
+
+/** 根据 scope 参数获取有效的 ULTRA_MEMORY_HOME */
+function getEffectiveHome(scope) {
+  if (!scope) return BASE_ULTRA_MEMORY_HOME;
+  if (_scopedHomes.has(scope)) return _scopedHomes.get(scope);
+  return scopeToHome(scope);
+}
+
+function runScript(script, args = [], extraEnv = {}) {
   const scriptPath = path.join(SCRIPTS_DIR, script);
   try {
     const result = execFileSync(
       "python3",
       [scriptPath, ...args],
-      { encoding: "utf-8", timeout: 15000 }
+      {
+        encoding: "utf-8",
+        timeout: 15000,
+        env: { ...process.env, ...extraEnv },
+      }
     );
     return { success: true, output: result.trim() };
   } catch (e) {
@@ -48,7 +79,11 @@ const TOOLS = [
       type: "object",
       properties: {
         project: { type: "string", description: "项目名称", default: "default" },
-        resume: { type: "boolean", description: "尝试恢复最近会话", default: false }
+        resume:  { type: "boolean", description: "尝试恢复最近会话", default: false },
+        scope:   {
+          type: "string",
+          description: "隔离 scope，用于多用户/多 Agent 场景。格式：user:alice / agent:bot1 / project:myapp。不同 scope 拥有完全独立的记忆空间（sessions + semantic），互不干扰。留空则使用默认共享空间。"
+        }
       },
       required: []
     }
@@ -59,7 +94,8 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        session_id: { type: "string", description: "会话 ID" }
+        session_id: { type: "string", description: "会话 ID" },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["session_id"]
     }
@@ -88,7 +124,8 @@ const TOOLS = [
             knowledge_entry:  { type: "object",  description: "要写入知识库的条目 {title, content}，自动检测与已有知识的矛盾" }
           }
         },
-        tags: { type: "array", items: { type: "string" }, description: "标签列表" }
+        tags: { type: "array", items: { type: "string" }, description: "标签列表" },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["session_id", "op_type", "summary"]
     }
@@ -101,7 +138,8 @@ const TOOLS = [
       properties: {
         session_id: { type: "string", description: "当前会话 ID" },
         query: { type: "string", description: "检索关键词（中英文均可）" },
-        top_k: { type: "number", description: "返回结果数量，默认 5", default: 5 }
+        top_k: { type: "number", description: "返回结果数量，默认 5", default: 5 },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["session_id", "query"]
     }
@@ -113,7 +151,8 @@ const TOOLS = [
       type: "object",
       properties: {
         session_id: { type: "string", description: "当前会话 ID" },
-        force: { type: "boolean", description: "强制压缩，即使条数不足", default: false }
+        force: { type: "boolean", description: "强制压缩，即使条数不足", default: false },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["session_id"]
     }
@@ -125,7 +164,8 @@ const TOOLS = [
       type: "object",
       properties: {
         project: { type: "string", description: "项目名称", default: "default" },
-        verbose: { type: "boolean", description: "显示详细操作记录", default: false }
+        verbose: { type: "boolean", description: "显示详细操作记录", default: false },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: []
     }
@@ -140,7 +180,8 @@ const TOOLS = [
         updates: {
           type: "object",
           description: "要更新的字段（action=update 时必填）"
-        }
+        },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["action"]
     }
@@ -158,7 +199,8 @@ const TOOLS = [
           default: "all"
         },
         query: { type: "string", description: "搜索关键词（可选，空则返回全部该类型）", default: "" },
-        top_k: { type: "number", description: "返回数量", default: 10 }
+        top_k: { type: "number", description: "返回数量", default: 10 },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: []
     }
@@ -169,7 +211,8 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        session_id: { type: "string", description: "会话 ID" }
+        session_id: { type: "string", description: "会话 ID" },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["session_id"]
     }
@@ -183,9 +226,19 @@ const TOOLS = [
         title: { type: "string", description: "知识标题（100字内）", maxLength: 100 },
         content: { type: "string", description: "知识内容（200字内）", maxLength: 200 },
         project: { type: "string", description: "关联项目名", default: "default" },
-        tags: { type: "array", items: { type: "string" }, description: "标签列表", default: [] }
+        tags: { type: "array", items: { type: "string" }, description: "标签列表", default: [] },
+        scope: { type: "string", description: "隔离 scope（与 memory_init 时一致）" }
       },
       required: ["title", "content"]
+    }
+  },
+  {
+    name: "memory_scopes",
+    description: "列出所有已创建的隔离 scope，显示每个 scope 的会话数和存储路径。用于管理多用户/多 Agent 场景下的记忆空间",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: []
     }
   }
 ];
@@ -194,14 +247,24 @@ const TOOLS = [
 function executeTool(name, input) {
   switch (name) {
     case "memory_init": {
+      const scope = input.scope || "";
       const args = ["--project", input.project || "default"];
       if (input.resume) args.push("--resume");
-      return runScript("init.py", args);
+      if (scope) args.push("--scope", scope);
+      const result = runScript("init.py", args);
+      // 缓存 scoped home，后续工具调用复用
+      if (result.success && scope) {
+        const scoped = extractScopedHome(result.output) || scopeToHome(scope);
+        _scopedHomes.set(scope, scoped);
+      }
+      return result;
     }
     case "memory_status": {
       // 读取 meta.json 并调用 check_context_pressure
       const sessionId = input.session_id;
-      const metaPath = path.join(ULTRA_MEMORY_HOME, "sessions", sessionId, "meta.json");
+      const scope = input.scope || "";
+      const effectiveHome = getEffectiveHome(scope);
+      const metaPath = path.join(effectiveHome, "sessions", sessionId, "meta.json");
       let meta = {};
       try {
         meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
@@ -209,10 +272,12 @@ function executeTool(name, input) {
         return { success: false, output: `会话不存在: ${sessionId}` };
       }
       // 调用 init.py --check-pressure 获取压力级别
-      const pressureResult = runScript("init.py", ["--check-pressure", sessionId]);
+      const pressureResult = runScript("init.py", ["--check-pressure", sessionId],
+        scope ? { ULTRA_MEMORY_HOME: effectiveHome } : {});
       const statusLines = [
         `会话 ID: ${sessionId}`,
         `项目: ${meta.project || "default"}`,
+        `Scope: ${meta.scope || "（默认）"}`,
         `操作数: ${meta.op_count || 0}`,
         `最后里程碑: ${meta.last_milestone || "（无）"}`,
         `上次压缩: ${meta.last_summary_at || "（未压缩）"}`,
@@ -221,6 +286,7 @@ function executeTool(name, input) {
       return { success: true, output: statusLines.join("\n") };
     }
     case "memory_log": {
+      const scope = input.scope || "";
       const args = [
         "--session", input.session_id,
         "--type", input.op_type,
@@ -228,28 +294,37 @@ function executeTool(name, input) {
         "--detail", JSON.stringify(input.detail || {}),
         "--tags", (input.tags || []).join(",")
       ];
-      return runScript("log_op.py", args);
+      return runScript("log_op.py", args,
+        scope ? { ULTRA_MEMORY_HOME: getEffectiveHome(scope) } : {});
     }
     case "memory_recall": {
+      const scope = input.scope || "";
       const args = [
         "--session", input.session_id,
         "--query", input.query,
         "--top-k", String(input.top_k || 5)
       ];
-      return runScript("recall.py", args);
+      return runScript("recall.py", args,
+        scope ? { ULTRA_MEMORY_HOME: getEffectiveHome(scope) } : {});
     }
     case "memory_summarize": {
+      const scope = input.scope || "";
       const args = ["--session", input.session_id];
       if (input.force) args.push("--force");
-      return runScript("summarize.py", args);
+      return runScript("summarize.py", args,
+        scope ? { ULTRA_MEMORY_HOME: getEffectiveHome(scope) } : {});
     }
     case "memory_restore": {
+      const scope = input.scope || "";
       const args = ["--project", input.project || "default"];
       if (input.verbose) args.push("--verbose");
-      return runScript("restore.py", args);
+      return runScript("restore.py", args,
+        scope ? { ULTRA_MEMORY_HOME: getEffectiveHome(scope) } : {});
     }
     case "memory_profile": {
-      const profilePath = path.join(ULTRA_MEMORY_HOME, "semantic", "user_profile.json");
+      const scope = input.scope || "";
+      const effectiveHome = getEffectiveHome(scope);
+      const profilePath = path.join(effectiveHome, "semantic", "user_profile.json");
       if (input.action === "read") {
         try {
           const content = fs.readFileSync(profilePath, "utf-8");
@@ -270,7 +345,8 @@ function executeTool(name, input) {
     }
     case "memory_entities": {
       // 直接读取 entities.jsonl，按类型过滤后返回
-      const entitiesPath = path.join(ULTRA_MEMORY_HOME, "semantic", "entities.jsonl");
+      const scope = input.scope || "";
+      const entitiesPath = path.join(getEffectiveHome(scope), "semantic", "entities.jsonl");
       const targetType = (input.entity_type || "all").toLowerCase();
       const query = (input.query || "").toLowerCase();
       const topK = input.top_k || 10;
@@ -312,16 +388,47 @@ function executeTool(name, input) {
       }
     }
     case "memory_extract_entities": {
-      return runScript("extract_entities.py", ["--session", input.session_id, "--all"]);
+      const scope = input.scope || "";
+      return runScript("extract_entities.py", ["--session", input.session_id, "--all"],
+        scope ? { ULTRA_MEMORY_HOME: getEffectiveHome(scope) } : {});
     }
     case "memory_knowledge_add": {
+      const scope = input.scope || "";
       const args = [
         "--title", input.title,
         "--content", input.content,
         "--project", input.project || "default",
         "--tags", (input.tags || []).join(",")
       ];
-      return runScript("log_knowledge.py", args);
+      return runScript("log_knowledge.py", args,
+        scope ? { ULTRA_MEMORY_HOME: getEffectiveHome(scope) } : {});
+    }
+    case "memory_scopes": {
+      // 列出 scopes/ 下所有子目录，显示各自的会话数
+      const scopesDir = path.join(BASE_ULTRA_MEMORY_HOME, "scopes");
+      try {
+        if (!fs.existsSync(scopesDir)) {
+          return { success: true, output: "尚无隔离 scope（所有数据在默认空间）" };
+        }
+        const entries = fs.readdirSync(scopesDir, { withFileTypes: true })
+          .filter(e => e.isDirectory());
+        if (entries.length === 0) {
+          return { success: true, output: "尚无隔离 scope（所有数据在默认空间）" };
+        }
+        const lines = ["已创建的隔离 scope：\n"];
+        for (const e of entries) {
+          const scopeHome = path.join(scopesDir, e.name);
+          const sessDir = path.join(scopeHome, "sessions");
+          let sessCount = 0;
+          try { sessCount = fs.readdirSync(sessDir).length; } catch {}
+          // 还原显示名（user__alice → user:alice）
+          const displayName = e.name.replace(/__/g, ":");
+          lines.push(`  ${displayName.padEnd(24)} ${sessCount} 个会话  →  ${scopeHome}`);
+        }
+        return { success: true, output: lines.join("\n") };
+      } catch (err) {
+        return { success: false, output: `读取 scopes 失败: ${err.message}` };
+      }
     }
     default:
       return { success: false, output: `未知工具: ${name}` };

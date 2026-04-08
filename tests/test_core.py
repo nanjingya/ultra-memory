@@ -829,5 +829,107 @@ class TestKnowledgeDedup(unittest.TestCase):
                 self.assertGreaterEqual(entries[0].get("reinforced_count", 0), 1)
 
 
+# ─────────────────────────────────────────────────────────
+# 多用户/多 Agent scope 隔离测试
+# ─────────────────────────────────────────────────────────
+
+class TestScopeIsolation(unittest.TestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        import init as init_mod
+        self._orig_base = init_mod._BASE_HOME
+        # 让 init 使用临时目录
+        init_mod._BASE_HOME = Path(self.tmpdir)
+        import importlib
+        importlib.reload(init_mod)
+        init_mod._BASE_HOME = Path(self.tmpdir)
+        self.init_mod = init_mod
+
+    def tearDown(self):
+        import init as init_mod
+        import importlib
+        init_mod._BASE_HOME = self._orig_base
+        importlib.reload(init_mod)
+
+    def test_scope_to_home_empty_returns_base(self):
+        from init import _scope_to_home
+        home = _scope_to_home("")
+        # 无 scope 时应返回 base（不含 scopes 子目录）
+        self.assertNotIn("scopes", str(home))
+
+    def test_scope_to_home_user_prefix(self):
+        import os
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import _scope_to_home
+        home = _scope_to_home("user:alice")
+        self.assertIn("scopes", str(home))
+        self.assertIn("user__alice", str(home))
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+    def test_scope_to_home_agent_prefix(self):
+        import os
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import _scope_to_home
+        home = _scope_to_home("agent:bot1")
+        self.assertIn("agent__bot1", str(home))
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+    def test_scope_no_prefix_defaults_to_user(self):
+        """无前缀的 scope 名称自动补 user: 前缀"""
+        import os
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import _scope_to_home
+        home_explicit = _scope_to_home("user:alice")
+        home_implicit = _scope_to_home("alice")
+        self.assertEqual(home_explicit, home_implicit)
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+    def test_different_scopes_have_different_paths(self):
+        import os
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import _scope_to_home
+        home_alice = _scope_to_home("user:alice")
+        home_bob   = _scope_to_home("user:bob")
+        self.assertNotEqual(home_alice, home_bob)
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+    def test_scope_special_chars_sanitized(self):
+        """scope 中特殊字符应被替换为 _"""
+        import os
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import _scope_to_home
+        home = _scope_to_home("user:alice/evil/../path")
+        self.assertNotIn("..", str(Path(home).name))
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+    def test_init_creates_scoped_directory(self):
+        """带 scope 的 init 应在 scopes/ 下创建独立目录"""
+        import os
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import init_session
+        init_session(project="test", scope="user:alice")
+        scoped_dir = Path(self.tmpdir) / "scopes" / "user__alice"
+        self.assertTrue(scoped_dir.exists())
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+    def test_two_scopes_isolated(self):
+        """两个不同 scope 各自拥有独立的 sessions 目录"""
+        import os, time
+        os.environ["ULTRA_MEMORY_HOME"] = self.tmpdir
+        from init import init_session
+        meta_alice = init_session(project="proj", scope="user:alice")
+        time.sleep(1)  # 保证时间戳不同，session_id 唯一
+        meta_bob   = init_session(project="proj", scope="user:bob")
+        # session_id 不同
+        self.assertNotEqual(meta_alice["session_id"], meta_bob["session_id"])
+        # 存储在不同目录
+        alice_dir = Path(self.tmpdir) / "scopes" / "user__alice" / "sessions" / meta_alice["session_id"]
+        bob_dir   = Path(self.tmpdir) / "scopes" / "user__bob"   / "sessions" / meta_bob["session_id"]
+        self.assertTrue(alice_dir.exists())
+        self.assertTrue(bob_dir.exists())
+        del os.environ["ULTRA_MEMORY_HOME"]
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

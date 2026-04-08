@@ -352,6 +352,41 @@ def cmd_tier(args):
     print(f"\n✅ 共更新 {total_updated} 条操作的 tier 分级")
 
 
+# ── scopes 子命令 ─────────────────────────────────────────────────────────────
+
+def cmd_scopes(args):
+    """列出所有隔离 scope 及其会话数、存储路径"""
+    scopes_dir = ULTRA_MEMORY_HOME / "scopes"
+    if not scopes_dir.exists():
+        print("尚无隔离 scope（所有数据在默认空间）")
+        print(f"默认空间: {ULTRA_MEMORY_HOME}")
+        return
+
+    entries = [d for d in scopes_dir.iterdir() if d.is_dir()]
+    if not entries:
+        print("尚无隔离 scope（所有数据在默认空间）")
+        return
+
+    # 默认空间统计
+    default_sessions = ULTRA_MEMORY_HOME / "sessions"
+    default_count = len(list(default_sessions.iterdir())) if default_sessions.exists() else 0
+
+    print(f"\n{'Scope':<28} {'会话数':>6}  {'存储路径'}")
+    print("-" * 80)
+    print(f"{'（默认）':<28} {default_count:>6}  {ULTRA_MEMORY_HOME}")
+
+    for d in sorted(entries):
+        sess_dir = d / "sessions"
+        sess_count = len(list(sess_dir.iterdir())) if sess_dir.exists() else 0
+        # 还原显示名：user__alice → user:alice
+        display = d.name.replace("__", ":", 1)
+        print(f"{display:<28} {sess_count:>6}  {d}")
+
+    print()
+    print("用法：python3 scripts/init.py --scope user:alice --project myapp")
+    print("      python3 scripts/manage.py list --storage <scope_path>")
+
+
 # ── 主入口 ───────────────────────────────────────────────────────────────────
 
 def main():
@@ -399,6 +434,9 @@ def main():
     p_tier = sub.add_parser("tier", help="补写记忆分层标记")
     p_tier.add_argument("--session", default=None, help="指定会话 ID（默认所有会话）")
 
+    # scopes
+    sub.add_parser("scopes", help="列出所有隔离 scope（多用户/多 Agent）")
+
     args = parser.parse_args()
 
     if args.storage:
@@ -413,6 +451,7 @@ def main():
         "export": cmd_export,
         "gc":     cmd_gc,
         "tier":   cmd_tier,
+        "scopes": cmd_scopes,
     }
 
     if args.command not in dispatch:

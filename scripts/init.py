@@ -6,6 +6,7 @@ ultra-memory: 会话初始化脚本
 
 import os
 import sys
+import re
 import json
 import hashlib
 import argparse
@@ -19,7 +20,34 @@ if sys.stderr.encoding != "utf-8":
     sys.stderr.reconfigure(encoding="utf-8")
 
 
-ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
+_BASE_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
+ULTRA_MEMORY_HOME = _BASE_HOME  # 默认值，init_session 会根据 scope 覆盖
+
+
+def _scope_to_home(scope: str) -> Path:
+    """将 scope 字符串映射到独立存储子目录。
+
+    规则：
+      - 无 scope / 空字符串  →  默认根目录（向后兼容）
+      - "user:alice"         →  <base>/scopes/user__alice/
+      - "agent:codebot"      →  <base>/scopes/agent__codebot/
+      - "alice"（无前缀）    →  <base>/scopes/user__alice/（默认补 user: 前缀）
+
+    路径中只保留 [a-zA-Z0-9_-]，其余字符替换为 _。
+    不同 scope 拥有完全独立的 sessions/ 和 semantic/ 目录，互不干扰。
+    """
+    scope = (scope or "").strip()
+    if not scope:
+        base = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
+        return base
+    # 若无类型前缀，默认视为 user scope
+    if ":" not in scope:
+        scope = f"user:{scope}"
+    # 将 ":" 替换为 "__"（可逆转换），其余特殊字符替换为 "_"
+    safe = scope.replace(":", "__")
+    safe = re.sub(r"[^\w\-]", "_", safe)
+    base = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ultra-memory"))
+    return base / "scopes" / safe
 
 
 def get_session_id(project: str = "default") -> str:
@@ -28,7 +56,11 @@ def get_session_id(project: str = "default") -> str:
     return f"sess_{ts}_{h}"
 
 
-def init_session(project: str = "default", resume: bool = False) -> dict:
+def init_session(project: str = "default", resume: bool = False, scope: str = "") -> dict:
+    global ULTRA_MEMORY_HOME
+    # 根据 scope 计算有效存储根目录
+    ULTRA_MEMORY_HOME = _scope_to_home(scope)
+
     sessions_dir = ULTRA_MEMORY_HOME / "sessions"
     semantic_dir = ULTRA_MEMORY_HOME / "semantic"
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +82,7 @@ def init_session(project: str = "default", resume: bool = False) -> dict:
     meta = {
         "session_id": session_id,
         "project": project,
+        "scope": scope or "",
         "started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "op_count": 0,
         "last_summary_at": None,
@@ -67,10 +100,14 @@ def init_session(project: str = "default", resume: bool = False) -> dict:
     # 更新会话索引
     update_session_index(session_id, project, semantic_dir)
 
-    print(f"[ultra-memory] ✅ 会话初始化完成")
+    scope_label = f" [{scope}]" if scope else ""
+    print(f"[ultra-memory] ✅ 会话初始化完成{scope_label}")
     print(f"[ultra-memory] session_id: {session_id}")
     print(f"[ultra-memory] 存储路径: {session_dir}")
     print(f"[ultra-memory] 运行模式: {meta['mode']}")
+    if scope:
+        # 打印 scoped home 路径，供调用方 export ULTRA_MEMORY_HOME
+        print(f"[ultra-memory] SCOPED_HOME={ULTRA_MEMORY_HOME}")
     print("MEMORY_READY")
 
     return meta
@@ -235,9 +272,14 @@ if __name__ == "__main__":
     parser.add_argument("--project", default="default", help="项目名称")
     parser.add_argument("--resume", action="store_true", help="尝试恢复最近会话")
     parser.add_argument("--check-pressure", metavar="SESSION_ID", help="检查指定会话的 context 压力")
+    parser.add_argument(
+        "--scope", default="",
+        help="隔离 scope（如 user:alice / agent:bot1 / project:myapp）。"
+             "同一 scope 内的所有会话共享独立的记忆空间，互不干扰。"
+    )
     args = parser.parse_args()
 
     if args.check_pressure:
         check_context_pressure(args.check_pressure)
     else:
-        init_session(args.project, args.resume)
+        init_session(args.project, args.resume, args.scope)
