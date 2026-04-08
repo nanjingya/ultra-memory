@@ -356,7 +356,15 @@ def search_ops(session_dir: Path, query_tokens: list[str], top_k: int) -> list[d
         tw = time_weight(ts) if ts else 0.85
         op_type = op.get("type", "").lower()
         type_mult = op_type_weight.get(op_type, 0.8)
-        score = bm25_score * tw * type_mult
+
+        # 重要性权重：(0.5 + 0.5×importance) 使高重要性操作分数最多翻倍
+        importance = op.get("importance", 0.5)
+        importance_mult = 0.5 + 0.5 * importance
+
+        # 访问频率加成：log(1 + access_count) × 0.1 使常被召回的记忆衰减更慢
+        access_boost = 1.0 + math.log1p(op.get("access_count", 0)) * 0.1
+
+        score = bm25_score * tw * type_mult * importance_mult * access_boost
 
         if score > 0:
             ctx = get_context_window(all_ops, op["seq"], window=1)
@@ -925,6 +933,40 @@ def search_tfidf(session_dir: Path, all_ops: list[dict],
     return []
 
 
+# ── 访问计数回写 ───────────────────────────────────────────────────────────
+
+
+def _increment_access_count(session_dir: Path, seq_set: set[int]) -> None:
+    """将被召回操作的 access_count +1，写回 ops.jsonl（原子替换）。
+    用于访问频率感知衰减：常被召回的记忆在时间衰减公式中获得加成，衰减更慢。
+    seq_set 为空时跳过，异常时静默忽略（不阻塞检索）。
+    """
+    if not seq_set:
+        return
+    ops_file = session_dir / "ops.jsonl"
+    if not ops_file.exists():
+        return
+    try:
+        lines = ops_file.read_text(encoding="utf-8").splitlines()
+        updated = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                op = json.loads(line)
+                if op.get("seq") in seq_set:
+                    op["access_count"] = op.get("access_count", 0) + 1
+                updated.append(json.dumps(op, ensure_ascii=False))
+            except json.JSONDecodeError:
+                updated.append(line)
+        tmp = ops_file.with_suffix(".tmp")
+        tmp.write_text("\n".join(updated) + "\n", encoding="utf-8")
+        tmp.replace(ops_file)
+    except Exception:
+        pass  # 回写失败不影响检索结果
+
+
 # ── RRF 融合 ──────────────────────────────────────────────────────────────
 
 
@@ -1191,6 +1233,14 @@ def recall(session_id: str, query: str, top_k: int = 5, as_of: str = ""):
     if not found:
         print(f"[RECALL] 未找到与「{query}」相关的记忆")
         return
+
+    # 回写 access_count：常被召回的操作衰减更慢
+    recalled_seqs = {
+        r["data"]["seq"]
+        for r in found
+        if r.get("source") in ("ops", "tfidf", "embedding") and "seq" in r.get("data", {})
+    }
+    _increment_access_count(session_dir, recalled_seqs)
 
     time_travel_note = f" [时间旅行: {as_of}]" if as_of else ""
     print(f"\n[RECALL] 找到 {len(found)} 条相关记录（查询: {query}）{time_travel_note}：\n")

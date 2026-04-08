@@ -40,6 +40,32 @@ ULTRA_MEMORY_HOME = Path(os.environ.get("ULTRA_MEMORY_HOME", Path.home() / ".ult
 DEFAULT_HALF_LIFE_DAYS = 30
 DEFAULT_FORGET_THRESHOLD = 0.05
 
+# ── 记忆类型 TTL 分层（参照 sdr-supermemory）─────────────────────────────
+# permanent: 永不过期（用户画像、关键决策、里程碑）
+# insight:   会话洞察、偏好（90天）
+# signal:    临时信号、错误记录（30天）
+# default:   其他事实（30天）
+
+MEMORY_TYPE_TTL = {
+    "permanent": None,   # 永不过期
+    "insight":   90,     # 天
+    "signal":    30,     # 天
+    "default":   30,     # 天
+}
+
+# 实体类型 / 标签 → 记忆类型映射
+ENTITY_TYPE_TO_MEMORY_TYPE = {
+    "dependency": "permanent",   # 依赖包一般不变化
+    "decision":   "permanent",   # 关键决策永久保留
+    "class":      "permanent",   # 类定义稳定
+    "function":   "insight",     # 函数实现可能演进
+    "file":       "insight",     # 文件可能变化
+    "error":      "signal",      # 错误记录临时
+    "preference": "permanent",   # 用户偏好永久
+    "person":     "permanent",   # 人物信息永久
+    "project":    "permanent",   # 项目配置永久
+}
+
 # 衰减等级边界
 DECAY_LEVELS = [
     (0.6, "none"),
@@ -114,7 +140,45 @@ def compute_decay_score(
     return max(0.0, min(1.0, score))
 
 
-def compute_decay_level(score: float) -> str:
+def detect_memory_type(fact: dict) -> str:
+    """
+    根据事实的实体类型、标签或来源判断记忆类型。
+    返回 "permanent" | "insight" | "signal" | "default"。
+    """
+    # 1. 实体类型优先
+    entity_type = fact.get("entity_type", "")
+    if entity_type and entity_type in ENTITY_TYPE_TO_MEMORY_TYPE:
+        return ENTITY_TYPE_TO_MEMORY_TYPE[entity_type]
+
+    # 2. 标签判断
+    tags = set(fact.get("tags", []))
+    if tags & {"preference", "person", "project", "milestone"}:
+        return "permanent"
+    if tags & {"error", "debug", "signal"}:
+        return "signal"
+
+    # 3. 来源类型判断
+    source_type = fact.get("source_type", "")
+    if source_type in ("milestone", "decision"):
+        return "permanent"
+    if source_type in ("error",):
+        return "signal"
+
+    # 4. fact 内容关键词（针对 facts.jsonl 中无 entity_type 的情况）
+    content = (fact.get("subject", "") + " " + fact.get("predicate", "") + " " + fact.get("object", "")).lower()
+    permanent_kw = ["用户", "偏好", "决策", "项目", "配置", "住在", "工作", "职"]
+    signal_kw = ["错误", "报错", "失败", "异常", "bug"]
+    for kw in permanent_kw:
+        if kw in content:
+            return "permanent"
+    for kw in signal_kw:
+        if kw in content:
+            return "signal"
+
+    return "default"
+
+
+
     """根据衰减评分确定衰减等级"""
     for threshold, level in DECAY_LEVELS:
         if score >= threshold:
@@ -239,6 +303,9 @@ def run_decay_pass(session_id: str | None = None):
         if not fid:
             continue
         if fid not in meta["facts"]:
+            mem_type = detect_memory_type(fact)
+            ttl_days = MEMORY_TYPE_TTL[mem_type]
+
             meta["facts"][fid] = {
                 "confidence": fact.get("confidence", 0.7),
                 "access_count": fact.get("access_count", 1),
@@ -246,7 +313,8 @@ def run_decay_pass(session_id: str | None = None):
                 "last_updated": fact.get("ts", _now_iso()),
                 "importance_score": compute_importance_score(fact, {}),
                 "decay_level": "none",
-                "ttl_days": DEFAULT_HALF_LIFE_DAYS,
+                "ttl_days": ttl_days,
+                "memory_type": mem_type,
                 "expires_at": None,
                 "status": "active",
                 "contradiction_count": fact.get("contradiction_count", 0),
@@ -294,8 +362,12 @@ def run_decay_pass(session_id: str | None = None):
         new_level = compute_decay_level(decay_score)
         fact_meta["decay_level"] = new_level
 
-        # 更新 ttl_days 配置
+        # 更新 ttl_days 配置（仅 non-permanent 类型）
         ttl_days = fact_meta.get("ttl_days", DEFAULT_HALF_LIFE_DAYS)
+        # permanent 类型永不过期
+        if ttl_days is None:
+            fact_meta["decay_level"] = "none"
+            continue
 
         # 触发遗忘
         if new_level == "forgotten" and old_level != "forgotten":

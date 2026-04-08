@@ -20,6 +20,10 @@
 | **摘要压缩** | 每 50 条操作自动压缩，context 占用保持在可控范围 |
 | **冲突检测** | 用户偏好或知识库出现矛盾时自动标记旧记录 |
 | **三层记忆分级** | core / working / peripheral 自动分类，方便清理历史数据 |
+| **重要性评分** | 写入时自动评分（0-1），决策/错误/里程碑排名更靠前 |
+| **访问频率感知** | 被频繁检索的记忆衰减更慢，长期保留用户真正关心的内容 |
+| **知识库去重** | 相似条目（相似度 >0.8）自动强化已有条目，避免重复噪音 |
+| **自动捕获钩子** | Claude Code PostToolUse 钩子自动记录工具调用，无需手动触发 |
 | **可选语义增强** | 安装 sentence-transformers 后支持向量检索，完全本地运行 |
 | **零外部服务依赖** | 核心功能仅用 Python 标准库，无需数据库或云服务 |
 | **全平台支持** | MCP Server / REST API / Claude Code / OpenClaw |
@@ -51,6 +55,14 @@ npx clawhub@latest install ultra-memory
 ### Claude Code
 
 将 `SKILL.md` 内容复制到项目根目录，或配置 skill 路径。
+
+**自动捕获（推荐）**：设置环境变量后，每次工具调用自动记录：
+
+```bash
+export ULTRA_MEMORY_SESSION=sess_myproject   # 先 init.py 创建会话
+```
+
+将 `.claude/settings.json` 复制到项目根目录的 `.claude/` 目录即可启用自动钩子。
 
 ### 任意 LLM 平台（REST API）
 

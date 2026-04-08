@@ -82,6 +82,42 @@ OP_TYPES = [
     "decision", "error", "milestone"
 ]
 
+# 操作类型基础重要性（0.0-1.0）
+_IMPORTANCE_OP_BASE = {
+    "milestone": 1.0,
+    "decision": 0.9,
+    "user_instruction": 0.85,
+    "error": 0.8,
+    "reasoning": 0.5,
+    "file_write": 0.4,
+    "bash_exec": 0.35,
+    "file_read": 0.2,
+    "tool_call": 0.2,
+}
+
+# 关键词 → 重要性加分（取最大值，不叠加）
+_IMPORTANCE_KEYWORDS = [
+    ("critical",  0.3), ("重要", 0.3), ("必须", 0.3), ("关键", 0.3),
+    ("error",     0.25), ("failed", 0.25), ("exception", 0.2),
+    ("decision",  0.2), ("fix",  0.2), ("修复", 0.2),
+    ("完成",      0.2), ("done", 0.2), ("✅", 0.2),
+    ("deploy",    0.2), ("release", 0.2), ("发布", 0.2),
+    ("bug",       0.15), ("issue", 0.1), ("warning", 0.1),
+]
+
+
+def _compute_importance(op_type: str, summary: str, detail: dict) -> float:
+    """计算操作重要性分数（0.0–1.0），写入时评分，检索时乘权加分。
+    基础分来自操作类型，关键词加分取最大值，上限 1.0。
+    """
+    base = _IMPORTANCE_OP_BASE.get(op_type, 0.3)
+    combined = summary.lower() + " " + json.dumps(detail, ensure_ascii=False).lower()
+    bonus = max(
+        (weight for kw, weight in _IMPORTANCE_KEYWORDS if kw in combined),
+        default=0.0,
+    )
+    return round(min(1.0, base + bonus), 2)
+
 # 扩展标签体系：覆盖 setup/code/test/debug/refactor/deploy/config/data/api/ui 十大类
 AUTO_TAGS = {
     # setup — 环境初始化、依赖安装
@@ -336,6 +372,8 @@ def log_op(
         "detail": detail,
         "tags": all_tags,
         "compressed": False,
+        "importance": _compute_importance(op_type, summary, detail),
+        "access_count": 0,
     }
 
     # ── 矛盾检测（写入 ops.jsonl 之前）──────────────────────────────────────

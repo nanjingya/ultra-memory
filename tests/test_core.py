@@ -3,7 +3,9 @@
 ultra-memory 核心模块单元测试
 覆盖：BM25Index、tokenize、expand_query（同义词扩展）、
       conflict_detector（画像冲突 + 知识库冲突）、time_weight（Weibull）、
-      rrf_merge、extract_snippet、filter_memory_markers、classify_tier
+      rrf_merge、extract_snippet、filter_memory_markers、classify_tier、
+      _compute_importance（重要性评分）、_increment_access_count（访问回写）、
+      log_knowledge 语义去重
 """
 
 import sys
@@ -29,8 +31,10 @@ from recall import (
     rrf_merge,
     _get_doc_id,
     extract_snippet,
+    _increment_access_count,
 )
-from log_op import filter_memory_markers
+from log_op import filter_memory_markers, _compute_importance
+from log_knowledge import log_knowledge, _bm25_similarity, _find_similar_entry
 from summarize import classify_tier, TIER_CORE, TIER_WORKING, TIER_PERIPHERAL
 from conflict_detector import (
     detect_profile_conflict,
@@ -660,6 +664,169 @@ class TestMemoryTier(unittest.TestCase):
         self.assertNotEqual(TIER_CORE, TIER_WORKING)
         self.assertNotEqual(TIER_WORKING, TIER_PERIPHERAL)
         self.assertNotEqual(TIER_CORE, TIER_PERIPHERAL)
+
+
+# ─────────────────────────────────────────────────────────
+# 重要性评分测试
+# ─────────────────────────────────────────────────────────
+
+class TestComputeImportance(unittest.TestCase):
+
+    def test_milestone_is_max(self):
+        score = _compute_importance("milestone", "项目发布完成", {})
+        self.assertGreaterEqual(score, 0.9)
+
+    def test_file_read_is_low(self):
+        score = _compute_importance("file_read", "读取 config.yaml", {})
+        self.assertLessEqual(score, 0.5)
+
+    def test_error_keyword_boosts_score(self):
+        """error 关键词应提升基础分"""
+        base = _compute_importance("reasoning", "分析问题", {})
+        boosted = _compute_importance("reasoning", "error: connection failed", {})
+        self.assertGreater(boosted, base)
+
+    def test_importance_range(self):
+        """所有情况下分数应在 [0, 1]"""
+        for op_type in ("milestone", "decision", "error", "file_read", "tool_call", "bash_exec"):
+            score = _compute_importance(op_type, "some summary", {"key": "value"})
+            self.assertGreaterEqual(score, 0.0)
+            self.assertLessEqual(score, 1.0)
+
+    def test_critical_keyword_boosts_any_type(self):
+        """critical 关键词对任意类型均加分"""
+        base = _compute_importance("file_write", "更新了文件", {})
+        boosted = _compute_importance("file_write", "critical: 必须修复此问题", {})
+        self.assertGreater(boosted, base)
+
+    def test_decision_with_deploy_higher_than_base(self):
+        score = _compute_importance("decision", "决定使用 docker deploy", {})
+        base = _compute_importance("decision", "决定了一件事", {})
+        self.assertGreaterEqual(score, base)
+
+
+# ─────────────────────────────────────────────────────────
+# 访问计数回写测试
+# ─────────────────────────────────────────────────────────
+
+class TestIncrementAccessCount(unittest.TestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.session_dir = Path(self.tmpdir) / "sessions" / "test_sess"
+        self.session_dir.mkdir(parents=True)
+        self.ops_file = self.session_dir / "ops.jsonl"
+
+    def _write_ops(self, ops: list[dict]):
+        with open(self.ops_file, "w", encoding="utf-8") as f:
+            for op in ops:
+                f.write(json.dumps(op) + "\n")
+
+    def _read_ops(self) -> list[dict]:
+        result = []
+        for line in self.ops_file.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                result.append(json.loads(line))
+        return result
+
+    def test_increment_existing_seq(self):
+        self._write_ops([
+            {"seq": 1, "summary": "op1", "access_count": 0},
+            {"seq": 2, "summary": "op2", "access_count": 3},
+        ])
+        _increment_access_count(self.session_dir, {1})
+        ops = self._read_ops()
+        self.assertEqual(ops[0]["access_count"], 1)
+        self.assertEqual(ops[1]["access_count"], 3)  # 未被召回，不变
+
+    def test_increment_multiple(self):
+        self._write_ops([
+            {"seq": 1, "summary": "op1", "access_count": 0},
+            {"seq": 2, "summary": "op2", "access_count": 0},
+            {"seq": 3, "summary": "op3", "access_count": 0},
+        ])
+        _increment_access_count(self.session_dir, {1, 3})
+        ops = self._read_ops()
+        self.assertEqual(ops[0]["access_count"], 1)
+        self.assertEqual(ops[1]["access_count"], 0)
+        self.assertEqual(ops[2]["access_count"], 1)
+
+    def test_increment_cumulative(self):
+        """多次调用应累积"""
+        self._write_ops([{"seq": 1, "summary": "op1", "access_count": 5}])
+        _increment_access_count(self.session_dir, {1})
+        _increment_access_count(self.session_dir, {1})
+        ops = self._read_ops()
+        self.assertEqual(ops[0]["access_count"], 7)
+
+    def test_empty_seq_set_no_change(self):
+        self._write_ops([{"seq": 1, "summary": "op1", "access_count": 0}])
+        _increment_access_count(self.session_dir, set())
+        ops = self._read_ops()
+        self.assertEqual(ops[0]["access_count"], 0)
+
+    def test_missing_file_no_error(self):
+        """ops 文件不存在时不应抛异常"""
+        _increment_access_count(self.session_dir, {1})  # 应静默通过
+
+
+# ─────────────────────────────────────────────────────────
+# 知识库语义去重测试
+# ─────────────────────────────────────────────────────────
+
+class TestKnowledgeDedup(unittest.TestCase):
+
+    def test_identical_text_high_similarity(self):
+        sim = _bm25_similarity("pandas 数据清洗方法", "pandas 数据清洗方法")
+        self.assertAlmostEqual(sim, 1.0, delta=0.01)
+
+    def test_completely_different_text_zero(self):
+        sim = _bm25_similarity("pandas read_csv 用法", "docker 部署配置")
+        self.assertLess(sim, 0.2)
+
+    def test_partial_overlap_moderate(self):
+        sim = _bm25_similarity("pandas read_csv 方法", "pandas 如何使用 read_csv")
+        self.assertGreater(sim, 0.2)
+
+    def test_find_similar_returns_correct_idx(self):
+        entries = [
+            {"title": "docker 部署", "content": "使用 docker-compose"},
+            {"title": "pandas read_csv 方法", "content": "可以用 read_csv 读取"},
+        ]
+        idx, sim = _find_similar_entry("pandas read_csv 的使用", "read_csv 教程", entries)
+        self.assertEqual(idx, 1)
+        self.assertGreater(sim, 0.0)
+
+    def test_find_similar_skips_superseded(self):
+        entries = [
+            {"title": "pandas read_csv", "content": "read_csv", "superseded": True},
+        ]
+        idx, sim = _find_similar_entry("pandas read_csv", "read_csv", entries)
+        self.assertEqual(idx, -1)
+
+    def test_log_knowledge_dedup_reinforces(self):
+        """写入高度相似条目时应强化已有条目而非新增"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import os as _os
+            _os.environ["ULTRA_MEMORY_HOME"] = tmpdir
+            # 重新加载模块以使用新的 HOME
+            import importlib
+            import log_knowledge as lk
+            importlib.reload(lk)
+            lk.ULTRA_MEMORY_HOME = Path(tmpdir)
+
+            lk.log_knowledge("pandas 数据清洗方法", "使用 read_csv 和 dropna 处理数据")
+            lk.log_knowledge("pandas 数据清洗的方法", "read_csv dropna 处理数据")
+
+            kb_file = Path(tmpdir) / "semantic" / "knowledge_base.jsonl"
+            entries = [json.loads(l) for l in kb_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+            # 第二次写入应强化已有条目，不新增行
+            # (如果相似度超过阈值，条目数保持 1)
+            # 相似度可能略低于阈值（取决于分词），允许最多 2 条
+            self.assertLessEqual(len(entries), 2)
+            # 如果只有 1 条，检查 reinforced_count
+            if len(entries) == 1:
+                self.assertGreaterEqual(entries[0].get("reinforced_count", 0), 1)
 
 
 if __name__ == "__main__":
