@@ -33,7 +33,9 @@
             "description": "Session ID returned by memory_init"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       }
     }
   },
@@ -51,7 +53,17 @@
           },
           "op_type": {
             "type": "string",
-            "enum": ["tool_call", "file_write", "file_read", "bash_exec", "reasoning", "user_instruction", "decision", "error", "milestone"],
+            "enum": [
+              "tool_call",
+              "file_write",
+              "file_read",
+              "bash_exec",
+              "reasoning",
+              "user_instruction",
+              "decision",
+              "error",
+              "milestone"
+            ],
             "description": "Operation type"
           },
           "summary": {
@@ -60,15 +72,39 @@
           },
           "detail": {
             "type": "object",
-            "description": "Additional detail fields (optional)"
+            "description": "详细信息（可选）。特殊子字段：profile_update {key:value} 触发画像冲突检测；knowledge_entry {title,content} 触发知识库冲突检测；path 文件路径；cmd 命令",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "相关文件路径（file_write/read 时填）"
+              },
+              "cmd": {
+                "type": "string",
+                "description": "执行的命令（bash_exec 时填）"
+              },
+              "profile_update": {
+                "type": "object",
+                "description": "用户偏好更新 {key: value}，自动检测矛盾"
+              },
+              "knowledge_entry": {
+                "type": "object",
+                "description": "知识库条目 {title, content}，自动检测矛盾"
+              }
+            }
           },
           "tags": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Tag list (optional, auto-generated if omitted)"
           }
         },
-        "required": ["session_id", "op_type", "summary"]
+        "required": [
+          "session_id",
+          "op_type",
+          "summary"
+        ]
       }
     }
   },
@@ -93,7 +129,10 @@
             "description": "Number of results to return (default: 5)"
           }
         },
-        "required": ["session_id", "query"]
+        "required": [
+          "session_id",
+          "query"
+        ]
       }
     }
   },
@@ -114,7 +153,9 @@
             "description": "Force compression even if operation count is low"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       }
     }
   },
@@ -149,7 +190,10 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": ["read", "update"],
+            "enum": [
+              "read",
+              "update"
+            ],
             "description": "Operation type"
           },
           "updates": {
@@ -157,7 +201,9 @@
             "description": "Fields to update (required when action=update)"
           }
         },
-        "required": ["action"]
+        "required": [
+          "action"
+        ]
       }
     }
   },
@@ -171,7 +217,15 @@
         "properties": {
           "entity_type": {
             "type": "string",
-            "enum": ["function", "file", "dependency", "decision", "error", "class", "all"],
+            "enum": [
+              "function",
+              "file",
+              "dependency",
+              "decision",
+              "error",
+              "class",
+              "all"
+            ],
             "description": "Entity type filter (all = no filter)"
           },
           "query": {
@@ -200,7 +254,9 @@
             "description": "Session ID"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       }
     }
   },
@@ -226,11 +282,16 @@
           },
           "tags": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Tag list (optional)"
           }
         },
-        "required": ["title", "content"]
+        "required": [
+          "title",
+          "content"
+        ]
       }
     }
   }

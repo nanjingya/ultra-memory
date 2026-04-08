@@ -28,7 +28,9 @@
             "description": "Session ID returned by memory_init"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       }
     },
     {
@@ -51,15 +53,21 @@
           },
           "detail": {
             "type": "OBJECT",
-            "description": "Additional detail fields (optional)"
+            "description": "Detail fields (optional). Special sub-fields: profile_update {key:value} triggers profile conflict detection; knowledge_entry {title,content} triggers knowledge conflict detection; path for file ops; cmd for bash ops"
           },
           "tags": {
             "type": "ARRAY",
-            "items": { "type": "STRING" },
+            "items": {
+              "type": "STRING"
+            },
             "description": "Tag list (optional, auto-generated if omitted)"
           }
         },
-        "required": ["session_id", "op_type", "summary"]
+        "required": [
+          "session_id",
+          "op_type",
+          "summary"
+        ]
       }
     },
     {
@@ -81,7 +89,10 @@
             "description": "Number of results to return (default: 5)"
           }
         },
-        "required": ["session_id", "query"]
+        "required": [
+          "session_id",
+          "query"
+        ]
       }
     },
     {
@@ -99,7 +110,9 @@
             "description": "Force compression even if operation count is low"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       }
     },
     {
@@ -134,7 +147,9 @@
             "description": "Fields to update (required when action=update)"
           }
         },
-        "required": ["action"]
+        "required": [
+          "action"
+        ]
       }
     },
     {
@@ -169,7 +184,9 @@
             "description": "Session ID"
           }
         },
-        "required": ["session_id"]
+        "required": [
+          "session_id"
+        ]
       }
     },
     {
@@ -192,11 +209,16 @@
           },
           "tags": {
             "type": "ARRAY",
-            "items": { "type": "STRING" },
+            "items": {
+              "type": "STRING"
+            },
             "description": "Tag list (optional)"
           }
         },
-        "required": ["title", "content"]
+        "required": [
+          "title",
+          "content"
+        ]
       }
     }
   ]

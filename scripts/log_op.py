@@ -287,13 +287,26 @@ def filter_memory_markers(text: str) -> str:
 
 
 def sanitize(text: str) -> str:
-    """过滤敏感信息 + 反馈环标记"""
+    """过滤敏感信息 + 反馈环标记（仅用于纯文本字段，不要对 JSON 字符串调用）"""
     if not text:
         return text
     text = filter_memory_markers(text)
     for pattern in SENSITIVE_PATTERNS:
         text = re.sub(pattern, "[REDACTED]", text)
     return text
+
+
+def sanitize_dict(obj) -> object:
+    """递归对 dict/list 中每个字符串值单独脱敏，不破坏 JSON 结构。
+    直接对序列化后的 JSON 字符串做 regex 替换会截断字符串值，产生非法 JSON。
+    """
+    if isinstance(obj, str):
+        return sanitize(obj)
+    if isinstance(obj, dict):
+        return {k: sanitize_dict(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_dict(item) for item in obj]
+    return obj
 
 
 def auto_tag(summary: str, detail: dict, op_type: str = "") -> list[str]:
@@ -359,7 +372,7 @@ def log_op(
 
     detail = detail or {}
     summary = sanitize(summary)
-    detail = json.loads(sanitize(json.dumps(detail, ensure_ascii=False)))
+    detail = sanitize_dict(detail)  # 逐字段脱敏，避免破坏 JSON 结构
 
     auto_tags = auto_tag(summary, detail, op_type)
     all_tags = list(set((tags or []) + auto_tags))

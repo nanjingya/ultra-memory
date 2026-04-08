@@ -78,7 +78,16 @@ const TOOLS = [
           description: "操作类型"
         },
         summary: { type: "string", description: "操作摘要（50字内）" },
-        detail: { type: "object", description: "详细信息（可选）" },
+        detail: {
+          type: "object",
+          description: "详细信息（可选）。支持特殊子字段：profile_update（触发画像冲突检测，传入 {key: value} 键值对）；knowledge_entry（触发知识库冲突检测，传入 {title, content}）",
+          properties: {
+            path:             { type: "string",  description: "相关文件路径（file_write/file_read 时填写）" },
+            cmd:              { type: "string",  description: "执行的命令（bash_exec 时填写）" },
+            profile_update:   { type: "object",  description: "用户偏好/画像更新 {key: value}，自动检测与已有画像的矛盾" },
+            knowledge_entry:  { type: "object",  description: "要写入知识库的条目 {title, content}，自动检测与已有知识的矛盾" }
+          }
+        },
         tags: { type: "array", items: { type: "string" }, description: "标签列表" }
       },
       required: ["session_id", "op_type", "summary"]
