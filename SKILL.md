@@ -14,10 +14,43 @@ AI Agent 的操作记忆系统，每次操作后记录，跨会话持久化，�
 
 ## 前置说明
 
-脚本已全部存在于 `$SKILL_DIR/scripts/`，直接调用，不需要生成，不需要理解内部架构。
+脚本位于 `$SKILL_DIR/scripts/`，直接调用，不需要生成，不需要理解内部架构。
 
 - `ULTRA_MEMORY_HOME` 默认值为 `~/.ultra-memory/`
-- `SKILL_DIR` 由 clawbot 注入，如未定义则用 `~/.openclaw/workspace/skills/ultra-memory/`
+- `SKILL_DIR` 解析顺序见步骤零
+
+---
+
+## 步骤零：环境探测
+
+**每次触发条件满足后，第一件事执行此步骤，决定运行模式。**
+
+### 1. 解析 SKILL_DIR
+
+```bash
+# 按顺序尝试，取第一个找到 init.py 的路径
+for _d in \
+  "${SKILL_DIR}" \
+  "${ULTRA_MEMORY_SKILL_DIR}" \
+  "${HOME}/ultra-memory" \
+  "${HOME}/.openclaw/workspace/skills/ultra-memory" \
+  "$(npm root -g 2>/dev/null)/ultra-memory"; do
+  if [ -f "${_d}/scripts/init.py" ]; then
+    export SKILL_DIR="${_d}"
+    echo "SCRIPT_AVAILABLE:${SKILL_DIR}"
+    break
+  fi
+done
+```
+
+### 2. 判断运行模式
+
+| 输出 | 运行模式 | 后续行为 |
+|------|---------|---------|
+| `SCRIPT_AVAILABLE:<路径>` | **脚本模式** | 按步骤一至七正常执行 |
+| 无任何输出 / 命令不可执行 | **无脚本模式** | 跳转到附录 E 执行，不再调用任何脚本 |
+
+无脚本模式的典型场景：claude.ai web、无文件系统的在线 LLM 平台。
 
 ---
 
@@ -384,20 +417,33 @@ python3 $SKILL_DIR/scripts/log_op.py \
 
 ### 7C：知识蒸馏（每月一次）
 
-**触发条件：**
+**触发条件（必须同时满足，按顺序检查）：**
 
-`user_profile.json` 的 `last_distillation` 字段距今超过 **30 天**，或该字段不存在。
+**先决条件（任一不满足则直接跳过，不读时间戳）：**
+
+```bash
+# 检查知识库是否存在且条目数 ≥ 10
+[ -f "$ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl" ] \
+  && [ "$(wc -l < "$ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl")" -ge 10 ] \
+  && echo "KB_SUFFICIENT" || echo "KB_SKIP"
+```
+
+输出 `KB_SKIP` → 立即跳过本步骤，不执行后续任何检查。
+
+**时间条件（先决条件通过后才检查）：**
+
+读取 `user_profile.json` 的 `last_distillation` 字段：
+- 字段不存在：视为"本机首次蒸馏"，触发一次
+- 字段存在且距今 > **30 天**：触发
+- 字段存在且距今 ≤ 30 天：跳过
+
+> **为什么先检查知识库再检查时间戳：** 换机器或清存储后知识库为空，若先检查时间戳会因字段缺失而触发，但步骤一统计条目数后立即跳过，造成每次会话都执行无效检查。倒序检查后空库直接短路，不会误触发。
 
 在步骤七 7A 执行完毕后，额外执行本步骤。
 
 **执行步骤：**
 
-**第一步：统计知识库规模**
-```bash
-wc -l $ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl
-```
-
-条目数少于 10 条时，跳过本步骤。
+**第一步：统计知识库规模（已在触发条件中完成，此处直接读结果）**
 
 **第二步：提取高价值条目**
 
@@ -442,7 +488,8 @@ wc -l $ULTRA_MEMORY_HOME/semantic/knowledge_base.jsonl
 |------|--------|------|
 | `ULTRA_MEMORY_HOME` | `~/.ultra-memory/` | 记忆存储根目录；使用 scope 时自动切换到 `<HOME>/scopes/<scope>/` |
 | `ULTRA_MEMORY_SESSION` | 空 | 当前会话 ID；配置后 Claude Code 自动捕获钩子（hook_capture.py）使用此值 |
-| `SKILL_DIR` | clawbot 注入 | skill 安装目录，未定义时用 `~/.openclaw/workspace/skills/ultra-memory/` |
+| `SKILL_DIR` | clawbot 注入 | skill 安装目录；未定义时步骤零按 `~/ultra-memory` → `~/.openclaw/workspace/skills/ultra-memory` → `npm root -g` 顺序探测，均未找到则切换无脚本模式 |
+| `ULTRA_MEMORY_SKILL_DIR` | 用户手动设置 | `SKILL_DIR` 的备用名，优先级低于 `SKILL_DIR`，高于路径探测 |
 | `SESSION_ID` | init.py 执行后自动生成 | 当前会话 ID，保存后供后续所有命令使用 |
 
 ---
@@ -567,3 +614,78 @@ ULTRA_MEMORY_TOKEN=your-secret-token python3 $SKILL_DIR/platform/server.py
 ```
 
 不配置 token 时服务器维持原有行为（仅监听 127.0.0.1，局域网不可访问）。
+
+---
+
+## 附录 E：无脚本降级模式
+
+**适用场景：** claude.ai web 对话、无文件系统的在线 LLM 平台、`$SKILL_DIR` 探测失败的任意环境。
+
+此模式不依赖文件系统、Python 脚本或任何外部工具，完全依赖 AI 自身维护结构化记忆 prompt。
+
+---
+
+### E1：会话内记忆结构
+
+AI 在内心维护以下结构（不主动输出给用户，仅在需要时引用）：
+
+```
+MEMORY_STATE:
+  project: <项目名>
+  started: <ISO时间>
+  ops: []           # 近 20 条操作；格式: {seq, type, summary}
+  milestones: []    # 里程碑列表（长期保留）
+  decisions: []     # 关键决策（长期保留）
+  knowledge: []     # 知识点，最多 10 条
+  profile:
+    tech_stack: []
+    observed_patterns: []
+```
+
+**核心原则：ops 满 20 条时，将最旧的非 milestone/decision 操作合并进 milestones 或丢弃。**
+
+---
+
+### E2：操作记录（替代 log_op.py）
+
+每次发生 E2 触发事件（见主文步骤二的触发条件表）后，AI 在内心更新 `MEMORY_STATE.ops`。无需输出，不增加对话轮数。
+
+---
+
+### E3：记忆检索（替代 recall.py）
+
+用户询问历史时，AI 直接扫描 `MEMORY_STATE` 内所有字段，提取相关条目回答。
+
+---
+
+### E4：摘要压缩（替代 summarize.py）
+
+对话超过 **30 轮** 或用户说"总结一下"时，AI 执行内部压缩：
+
+1. 将 `ops` 中重要性低的条目合并进 `milestones`/`decisions`
+2. 清空 `ops`，仅保留最近 5 条
+3. 向用户简述压缩结果（一句话）
+
+---
+
+### E5：跨会话限制（必须向用户说明）
+
+首次进入无脚本模式时，AI 主动告知用户：
+
+> "当前运行在无脚本模式，记忆仅在本次对话有效，关闭后无法恢复。如需跨会话持久化，请在 Claude Code 或安装了 ultra-memory 的环境中使用。"
+
+此说明只输出一次，不重复。
+
+---
+
+### E6：功能对比
+
+| 功能 | 脚本模式 | 无脚本模式 |
+|------|---------|----------|
+| 操作记录 | ✅ 持久化文件 | ✅ 会话内维护 |
+| 关键词检索 | ✅ BM25 + 向量 | ✅ AI 直接扫描 |
+| 摘要压缩 | ✅ 自动 | ✅ 手动触发 |
+| 跨会话恢复 | ✅ | ❌ |
+| 用户画像积累 | ✅ 持久化 | ⚠️ 仅当前会话 |
+| 知识蒸馏 | ✅ | ❌ |
+| 多 scope 隔离 | ✅ | ❌ |
