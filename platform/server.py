@@ -71,6 +71,27 @@ log = logging.getLogger("ultra-memory")
 
 # ── 工具路由表 ────────────────────────────────────────────────────────────
 
+_SUBPROCESS_ENV_ALLOWLIST = frozenset({
+    # 进程执行必需
+    "PATH", "PATHEXT", "SYSTEMROOT",
+    # Python 运行时
+    "PYTHONPATH", "PYTHONIOENCODING", "PYTHONUTF8",
+    # 用户/家目录（脚本用 Path.home() 回落）
+    "HOME", "USERPROFILE",
+    # 编码/本地化
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+    # Windows 临时目录
+    "TEMP", "TMP", "APPDATA", "LOCALAPPDATA",
+})
+
+
+def _build_child_env() -> dict[str, str]:
+    """返回子进程所需的最小 env，不透传父进程的敏感变量（如 API Key、DB 连接串等）。"""
+    child = {k: v for k, v in os.environ.items() if k in _SUBPROCESS_ENV_ALLOWLIST}
+    child["ULTRA_MEMORY_HOME"] = str(ULTRA_MEMORY_HOME)
+    return child
+
+
 def _run_script(script: str, args: list[str], timeout: int = 20) -> tuple[bool, str]:
     """运行 Python 脚本，返回 (success, output)"""
     cmd = [PYTHON, str(SCRIPTS_DIR / script)] + args
@@ -78,7 +99,7 @@ def _run_script(script: str, args: list[str], timeout: int = 20) -> tuple[bool, 
         result = subprocess.run(
             cmd, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            env={**os.environ, "ULTRA_MEMORY_HOME": str(ULTRA_MEMORY_HOME)},
+            env=_build_child_env(),
             timeout=timeout,
         )
         output = (result.stdout + result.stderr).strip()
@@ -463,6 +484,15 @@ def main():
         os.environ["ULTRA_MEMORY_HOME"] = str(ULTRA_MEMORY_HOME)
     if args.token:
         _BEARER_TOKEN = args.token
+
+    _local_hosts = {"127.0.0.1", "::1", "localhost"}
+    if args.host not in _local_hosts:
+        log.warning("⚠️  监听地址为 %s，服务将对外网络暴露，请确认这是预期行为。", args.host)
+        if not _BEARER_TOKEN:
+            log.warning(
+                "⚠️  当前未设置 Bearer Token，任意客户端均可无需认证访问此服务！"
+                " 请通过 --token 或环境变量 ULTRA_MEMORY_TOKEN 设置认证密钥。"
+            )
 
     server = HTTPServer((args.host, args.port), MemoryHandler)
 

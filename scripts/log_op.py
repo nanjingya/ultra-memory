@@ -76,6 +76,15 @@ SENSITIVE_PATTERNS = [
     r'[A-Za-z0-9]{32,}',  # 长随机字符串（可能是 token）
 ]
 
+# 敏感键名集合：无论值长短，都直接脱敏
+SENSITIVE_KEYS: frozenset[str] = frozenset({
+    "password", "passwd", "pwd",
+    "api_key", "apikey", "api-key",
+    "secret", "secret_key", "client_secret",
+    "access_token", "refresh_token", "auth_token", "id_token",
+    "bearer", "token", "private_key",
+})
+
 OP_TYPES = [
     "tool_call", "file_write", "file_read",
     "bash_exec", "reasoning", "user_instruction",
@@ -296,16 +305,19 @@ def sanitize(text: str) -> str:
     return text
 
 
-def sanitize_dict(obj) -> object:
+def sanitize_dict(obj, _parent_key: str = "") -> object:
     """递归对 dict/list 中每个字符串值单独脱敏，不破坏 JSON 结构。
     直接对序列化后的 JSON 字符串做 regex 替换会截断字符串值，产生非法 JSON。
+    敏感键名（password、api_key 等）的值无论长短都直接脱敏。
     """
     if isinstance(obj, str):
+        if _parent_key.lower().replace("-", "_") in SENSITIVE_KEYS:
+            return "[REDACTED]"
         return sanitize(obj)
     if isinstance(obj, dict):
-        return {k: sanitize_dict(v) for k, v in obj.items()}
+        return {k: sanitize_dict(v, _parent_key=k) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [sanitize_dict(item) for item in obj]
+        return [sanitize_dict(item, _parent_key=_parent_key) for item in obj]
     return obj
 
 
